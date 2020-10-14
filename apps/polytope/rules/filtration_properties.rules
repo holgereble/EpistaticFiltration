@@ -1,0 +1,138 @@
+#  Copyright (c) 2020
+#  Holger Eble (TU Berlin)
+#  Michael Joswig (TU Berlin and MPI MiS Leipzig)
+#  Lisa Lamberti (ETH Zuerich)
+#  William B. Ludington (Carnegie Science)
+
+#  This program is free software; you can redistribute it and/or modify it
+#  under the terms of the GNU General Public License as published by the
+#  Free Software Foundation; either version 2, or (at your option) any
+#  later version: http://www.gnu.org/licenses/gpl.txt.
+
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#-------------------------------------------------------------------------------
+
+object Filtration{
+
+    # @category Geometry
+    # The measurements form the data every further computation is based on. Thus, they should always be given. 
+    property MEASUREMENTS: Array<Array<Rational>>;    
+    
+    # @category Geometry
+    # The intersection of two adjacent simplices of the triangulation is called ridge (or sometimes wall). 
+    # Thus, every ridge belongs to a unique dual edge. The order of the array is by ascending epistatic weight.
+    property RIDGES: Array<Set<Int>>;
+
+    # @category Geometry
+    # Two adjacent simplices of the triangulation intersect in a ridge and the intersection leaves out precisely two vertices of the bipyramid, one of each pyramid.
+    # These two vertices are called satellite vertices of the given bipyramid (i.e. dual edge). 
+    # The vertices are labeled according to the row numbers of the underlying point matrix stored in the property POINTS.
+    # The order of the array is by ascending epistatic weight. 
+    property SATELLITE_VERTICES: Array<Pair<Int,Int>>;
+
+    # @category Geometry
+    # Every dual edge of the triangulation gives rise to an epistatic weight which is a real number. The order of the array is by ascending epistatic weight.
+    property EPISTATIC_WEIGHTS: Array<Float>;
+
+    # @category Geometry
+    # The height function which is used to compute the triangulation. 
+    # By convention we take the upward pointing facets of the lifted genotope (i.e. the phenotope) and project them back onto the original genotope which yields the MAXIMAL_CELLS.
+    # Taking the upper facets realtes to a certain maximization problem (instead of the lower facets and a minimization problem).
+    property HEIGHTS: Vector<Rational>; 
+
+    # @category Geometry
+    # Edges of the dual graph of the triangulation. 
+    # Each set of the array consists of two integer labels which relate to the labels of the maximal cells, i.e. the rows of the matrix stored in the property MAXIMAL_CELLS.
+    # The order of the array is by ascending epistatic weight.
+    property EDGES: Array<Set>;
+
+    # @category Geometry
+    # The bipyramids chosen by dual edges of the triangulation.
+    # Each entry of the array is a pair of sets of point labels according to the row numbers of the underlying point matrix stored in the property POINTS.
+    property BIPYRAMIDS: Array<Pair<Set,Set >>;    
+   
+    # @category Geometry
+    # At every merging step in the filtration process the partition of the maximal cells gets updated and the evolution is recorded here.
+    # The sets of integers contain labels of the maximal cells which coincide with the rows of the Matrix stored in the property MAXIMAL_CELLS.  
+    # The outer array is linearly ordered by time of occurence in the filtration process:
+    # The 0th entry of the outer array has one entry for each maximal cell. 
+    # The last entry of the outer array has one entry (all maximal cells merged).
+    property PARTITIONS: Array<Array<Set<Int>>>;
+    
+    # @category Geometry
+    # Collection of edge labels featuring critical edges only.
+    property CRITICAL_EDGES: Array<Int>;
+
+    # @category Geometry
+    # Slice of the array EPISTATIC_WEIGHTS featuring critical edges only.
+    # Redundant but useful property. 
+    property CRITICAL_EPISTATIC_WEIGHTS: Array<Float>;
+
+    # @category Geometry
+    # Slice of the array RIDGES featuring critical edges only.
+    # Redundant but useful property. 
+    property CRITICAL_RIDGES: Array <Set<Int>>;
+
+    # @category Geometry
+    # Slice of the array BIPYRAMIDS featuring critical edges only.
+    # Redundant but useful property. 
+    property CRITICAL_BIPYRAMIDS: Array<Pair<Set,Set>>;
+
+    # @category Geometry
+    # The triangulation. Integer labels refer to the row numbers of the underlying point matrix stored in the property POINTS. 
+    property MAXIMAL_CELLS: IncidenceMatrix<NonSymmetric>;
+    
+    # @category Geometry
+    # Lifted genotope by the height function as extra (last) column. 
+    property PHENOTOPE: Matrix;    
+    
+    # @category Geometry
+    # Stores the two determinants in the denominator of the epistatic weight formula. 
+    # The order of the array is by ascending epistatic weight of the underlying dual edge/bipyramid.
+    property PROJVOLS: Array<Pair<Int,Int>>;
+
+    # @category Geometry
+    # Stores the normalized volume of the ridge.
+    # The order of the array is by ascending epistatic weight of the underlying dual edge/bipyramid.
+    property INTPROJVOLS: Array<Float>;
+    
+    # @category Geometry
+    # Finite metric space on the dual graph nodes given by shortest paths.
+    # The labels refer to the labels of the maximal cells, i.e. the rows of the property MAXIMAL_CELLS.
+    property METRIC: Matrix<Rational>;   
+
+    # @category Geometry
+    # Every critical dual edge gives rise to a unique circuit which lies inside the bipyramid.
+    # Integer labels refer to the row numbers of the underlying point matrix stored in the property POINTS.
+    # The order of the array is by ascending epistatic weight of the underlying critical dual edge/bipyramid.
+    property FUNDAMENTAL_CIRCUITS: Array<Array<Int>>;
+
+    # @category Geometry
+    # Stores the sizes (cardinality) of the fundamental circuits.
+    # The order of the array is by ascending epistatic weight of the underlying critical dual edge/bipyramid.
+    property FUNDAMENTAL_MAGNITUDES: Array<Int>;
+   
+    # @category Geometry
+    # Stores the interaction order of the critical dual edges/bipyramids.
+    # The order of the array is by ascending epistatic weight of the underlying critical dual edge/bipyramid. 
+    property INTERACTION_ORDERS: Array<Int>;
+
+    # @category Geometry
+    # Calling $filtration->subfiltration(<PATTERN>) produces a face of $filtration.
+    # The property AS_SUBSYSTEM keeps track of which points/measurements/heights are used from $filtration.
+    # Integer labels refer to rows of the property POINTS.
+    property AS_SUBSYSTEM: Array<Int>;
+    
+    # @category Geometry
+    # Calling $filtration->subfiltration(<PATTERN>) produces a face of $filtration.
+    # The propert TAG is then set to <PATTERN> which could be *1**0 for instance.
+    property TAG: String;
+
+
+    
+
+
+}

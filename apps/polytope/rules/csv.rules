@@ -1,0 +1,157 @@
+#  Copyright (c) 2020
+#  Holger Eble (TU Berlin)
+#  Michael Joswig (TU Berlin and MPI MiS Leipzig)
+#  Lisa Lamberti (ETH Zuerich)
+#  William B. Ludington (Carnegie Science)
+
+#  This program is free software; you can redistribute it and/or modify it
+#  under the terms of the GNU General Public License as published by the
+#  Free Software Foundation; either version 2, or (at your option) any
+#  later version: http://www.gnu.org/licenses/gpl.txt.
+
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#-------------------------------------------------------------------------------
+
+object Filtration{
+    
+    # @category CSV
+    # Computes basic statistics for a given 5-dimensional filtration, e.g. number of critical dual edges and the ratio of significant edges, etc.
+    # Stores the result both to a csv and a TeX file in the folder /tmp/.
+    user_method basic_stats{
+        my $fil=shift;
+        my $filename = join("", "/tmp/basic_stats_",$fil->name_char,".csv");
+        open (FH, ">$filename") or die "failed to create $filename";
+        print FH join(",",  "", "Dataset:"), "\n", join(",", "Interaction dimension", $fil->name), "\n";
+        my @significant = my @total = (0)x$fil->DIM;;
+        for (my $i=2; $i<=$fil->DIM; ++$i){
+            ($total[$i],$significant[$i]) = basic_stats_dim($fil, $i);
+        }    
+        basic_stats_to_csv(\@total, \@significant);
+        close FH;
+        print STDOUT "Basic statistics csv file written to $filename.\n";
+        csv_to_tex($filename);
+    }
+
+    sub basic_stats_dim{
+        my ($fil, $dim) = @_;
+        my @subfiltrations = $fil->all_codim_subfiltrations($fil->DIM-$dim);
+        my ($total_no, $signif_no) = (0,0);
+        foreach my $subfil (@subfiltrations){
+            for(my $i=0; $i<$subfil->CRITICAL_SIGNIFICANCES->size; ++$i){
+                ++$total_no;
+                ++$signif_no if $subfil->CRITICAL_SIGNIFICANCES->[$i] eq "significant"
+            }
+        }
+        return ($total_no, $signif_no); 
+    }
+
+    sub basic_stats_to_csv{
+        my ($total_ref, $significant_ref) = @_;
+        my ($total_no, $significant_no)=0;
+        my @total = @{$total_ref};
+        my @significant = @{$significant_ref};
+        my @datarows = ();
+        push @datarows, join("", "2, ", $significant[2], "/", $total[2], " (", sprintf("%.3f", quotientstr($significant[2],$total[2]) * 100), ")\n");
+        push @datarows, summary_higher_dimensional($total_ref, $significant_ref);
+        for (my $i=3; $i<scalar(@total); ++$i){
+            push @datarows, join("", $i , "," ,$significant[$i], "/", $total[$i], " (", sprintf("%.3f", quotientstr($significant[$i],$total[$i]) * 100), ")\n");
+        } 
+        push @datarows, summary_total($total_ref, $significant_ref);
+        foreach my $row (@datarows){
+            print FH $row;
+        }
+    }
+
+    sub quotientstr{
+        my ($nom, $denom) = @_;
+        if ($denom!=0){return $nom/$denom}
+        else{return "undef"}
+    }
+
+    sub summary_total{
+        my ($total_ref, $significant_ref) = @_;
+        my @total = @{$total_ref};
+        my @significant = @{$significant_ref};
+        my ($total_no,$significant_no)=(0,0);
+        for (my $i=0; $i<scalar(@total); ++$i){
+            $total_no += $total[$i];
+            $significant_no += $significant[$i];
+        }
+        return join("", "total,",, $significant_no, "/", $total_no, " (", sprintf("%.3f", quotientstr($significant_no,$total_no) * 100), ")\n");
+    }
+
+    sub summary_higher_dimensional{
+        my ($total_ref, $significant_ref) = @_;
+        my @total = @{$total_ref};
+        my @significant = @{$significant_ref};
+        my ($total_no,$significant_no)=(0,0);
+        for (my $i=3; $i<scalar(@total); ++$i){
+            $total_no += $total[$i];
+            $significant_no += $significant[$i];
+        }
+        return join("", "all higher dimensional," ,$significant_no, "/", $total_no, " (", sprintf("%.3f", quotientstr($significant_no,$total_no) * 100), ")\n");
+    }
+    
+    sub csv_to_tex{
+        my $filename = $_[0];
+        my @data;
+        open(my $fh, '<', $filename) or die "Can't read file '$filename' [$!]\n";
+        my $tex_filename = $filename;
+        $tex_filename =~ s/.csv/.tex/g;
+        open OUT,"> $tex_filename";
+        print OUT "\\documentclass[a4paper,landscape]{article}\n
+            \\usepackage[a4paper,margin=1in,landscape]{geometry}\n
+            \\usepackage{booktabs}\n
+            \\begin{document}\n\n";
+        my $linecnt = 0;
+        while (my $line = <$fh>) {
+            chomp $line;
+            my @fields = split ",", $line;
+            push @data, \@fields;
+            if ($linecnt ==1){
+                my $no_cols = max(3,scalar(@fields));
+                my $tablemode = "l" x $no_cols;
+                print OUT join ("","\\begin{table}[h!]
+                        \\caption{basic statistics}","\\begin{tabular*}{\\linewidth}{\@{\\extracolsep{\\fill}}",$tablemode,"\@{}}\n");
+                print OUT "\\toprule \n
+                    \\multicolumn{1}{c}{} \& \\multicolumn{1}{l}{Datasets:} \& \\multicolumn{1}{r}{}\\\\";
+                print OUT " \\multicolumn{1}{c}{}";
+                for(my $i=1; $i<scalar(@fields); ++$i){
+                    print OUT "& \\multicolumn{1}{l}{$fields[$i]}";
+                }
+                print OUT "\\\\ \n \\midrule \n";
+            }
+            if ($linecnt>1){
+                print OUT  "\\multicolumn{1}{l}{", $fields[0],":}";
+                for (my $i=1; $i<scalar(@fields); ++$i){
+                    my $item = $fields[$i];
+                    $item =~ s/\%/\\\%/g;
+                    print OUT join("", "\& \\multicolumn{1}{l}{",$item ,"}");
+                }
+                print OUT "\\\\ \n";
+            }
+            ++$linecnt;
+        }
+        print OUT "\\bottomrule \n \\end{tabular*}\n
+            \\end{table}\n\\end{document}";
+        close OUT;
+        print STDOUT "Basic statistics tex file written to $tex_filename.\n";
+        close $fh;
+    }
+
+} 
+
+# Local Variables:
+# mode: perl
+# cperl-indent-level:4
+# End:
+
+
+
+
+
+
+

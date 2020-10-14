@@ -1,0 +1,547 @@
+#  Copyright (c) 2020
+#  Holger Eble (TU Berlin)
+#  Michael Joswig (TU Berlin and MPI MiS Leipzig)
+#  Lisa Lamberti (ETH Zuerich)
+#  William B. Ludington (Carnegie Science)
+
+#  This program is free software; you can redistribute it and/or modify it
+#  under the terms of the GNU General Public License as published by the
+#  Free Software Foundation; either version 2, or (at your option) any
+#  later version: http://www.gnu.org/licenses/gpl.txt.
+
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#-------------------------------------------------------------------------------
+
+object Filtration{
+
+rule HEIGHTS: MEASUREMENTS {
+        $this->HEIGHTS = -$this->get_means();        
+    }
+    
+    rule RIDGES, SATELLITE_VERTICES: BIPYRAMIDS {
+        ($this->RIDGES, $this->SATELLITE_VERTICES) = $this->walls_exposedverts;
+    }
+
+    rule METRIC: EPISTATIC_WEIGHTS, EDGES {
+        my $no_cells = get_no_maxcells($this->EDGES);
+        my $inc_matrix = get_inc_matrix($no_cells, $this->EDGES, $this->EPISTATIC_WEIGHTS); 
+        my $metric = get_metric($inc_matrix);
+        $this->METRIC = $metric;
+    }
+
+    rule PROJVOLS, INTPROJVOLS: MAXIMAL_CELLS, EDGES {
+        ($this->INTPROJVOLS, $this->PROJVOLS) = $this->lower_vols;
+    }
+
+    rule MAXIMAL_CELLS: HEIGHTS {
+        $this->MAXIMAL_CELLS = $this->get_MAXIMAL_CELLS();
+    }
+    
+    rule PHENOTOPE: POINTS, HEIGHTS {
+        $this->PHENOTOPE = $this->POINTS|$this->HEIGHTS;
+    }    
+    
+    rule EPISTATIC_WEIGHTS, EDGES: MAXIMAL_CELLS, PHENOTOPE {
+        $this->EPISTATIC_WEIGHTS = $this->get_evals;
+        $this->EDGES = $this->get_edges;
+    }
+    
+    rule BIPYRAMIDS: EDGES, MAXIMAL_CELLS {
+        $this->BIPYRAMIDS = $this->cells_simplices;
+    }
+    
+    rule PARTITIONS: EDGES, MAXIMAL_CELLS {
+        ($this->PARTITIONS) = $this->partitions_modedges;
+    }
+    
+    rule CRITICAL_EPISTATIC_WEIGHTS, CRITICAL_RIDGES, CRITICAL_BIPYRAMIDS: EPISTATIC_WEIGHTS, RIDGES, BIPYRAMIDS ,CRITICAL_EDGES {
+        my $evals = new Vector<Float>($this->EPISTATIC_WEIGHTS);
+        my $walls = new Vector <Set<Int>>($this->RIDGES);
+        my $simplices = new Vector<Pair<Set,Set>>($this->BIPYRAMIDS);
+        $this->CRITICAL_EPISTATIC_WEIGHTS = new Array<Float>($evals->slice($this->CRITICAL_EDGES)); 
+        $this->CRITICAL_RIDGES = new Array<Set<Int>>($walls->slice($this->CRITICAL_EDGES));
+        $this->CRITICAL_BIPYRAMIDS = new Array<Pair<Set,Set>>($simplices->slice($this->CRITICAL_EDGES));
+    }
+
+    rule FUNDAMENTAL_CIRCUITS, FUNDAMENTAL_MAGNITUDES, INTERACTION_ORDERS: POINTS, BIPYRAMIDS, CRITICAL_EDGES {
+        my ($circuits, $magnitudes, $interaction_orders) = $this->get_circuit_data();
+        $this->FUNDAMENTAL_CIRCUITS = $circuits;
+        $this->FUNDAMENTAL_MAGNITUDES = $magnitudes;
+        $this->INTERACTION_ORDERS = $interaction_orders;
+    }    
+
+    # @category Geometry
+    # Checks if the underlying subdivision is generic.
+    # @return Bool
+    user_method is_generic{
+    my $fil=shift;
+    my $maxcells=$fil->MAXIMAL_CELLS;
+    for (my $i=0; $i<$maxcells->rows; ++$i){
+        if ($maxcells->[$i]->size!=$fil->POINTS->cols){return false}
+    }
+    return true;
+    }
+   
+    # @category Geometry
+    # Returns a filtration over a face with given tag, e.g.such as "*0***" or "110**"; 
+    # Error catch: returns the given filtration if empty string is passed as input;
+    # @example
+    # $sub = $filtration->subfiltration("0****"); --> $sub is a 4-dimensional filtration
+    # $sub = $filtration->subfiltration("0***1"); --> $sub is a 3-dimensional filtration
+    # $sub = $filtration->subfiltration("01**1"); --> $sub is a 2-dimensional filtration
+    # @return Big object of type Filtration.
+    user_method subfiltration{
+        my ($fil,$str) = @_;
+        my $starstr= $str;
+        if (length($str) == 0 || $str eq "*"x$fil->DIM){return $fil};
+        if (!$fil->strtypecheck($str)){print STDOUT "wrong type\n"; return}
+        my @chars = split //, $str;
+        my @stars = grep { $chars[$_] eq '*' } 0..$#chars;
+        my @nonstars = grep { $chars[$_] ne '*' } 0..$#chars;
+        my $redtype = new Vector<Rational>(@chars[@nonstars]);        
+        $str =~s/\*/star/g;
+        my $newfil_name = join("", $fil->name, $str);
+        my @fil_idx = $fil->get_subfil_idx($redtype, [@nonstars]);
+        my @nonstars_aug = augment_by_one(@nonstars);
+        my @newfil_meas = ();
+        my $newfil_setope;
+        if(defined($fil->MEASUREMENTS)){
+            foreach(@fil_idx){push @newfil_meas, $fil->MEASUREMENTS->[$_];}
+            return new Filtration($newfil_name, TAG=>$starstr, POINTS=>$fil->POINTS->minor([@fil_idx], ~[@nonstars_aug]), MEASUREMENTS=> new Array<Array<Rational>>(@newfil_meas), AS_SUBSYSTEM=> new Array<Int>(@fil_idx));
+        }
+        elsif(defined($fil->SETOPE)){
+            $newfil_setope = new Matrix<Float>($fil->SETOPE->minor(new Set(@fil_idx),~[@nonstars_aug]));
+            return new Filtration($newfil_name, TAG=>$starstr, POINTS=>$fil->POINTS->minor([@fil_idx], ~[@nonstars_aug]), HEIGHTS=>$fil->HEIGHTS->slice([@fil_idx]) ,AS_SUBSYSTEM=> new Array<Int>(@fil_idx), SETOPE=>$newfil_setope);
+        }
+    }
+
+    # @category Geometry
+    # Collects subfiltrations over all faces of some given codimension 
+    # @example
+    # print $filtration->POINTS->cols-1;
+    # 5
+    # print scalar($filtration->all_codim_subfiltrations(2));
+    # 40
+    # print join (", ", map {($filtration->all_codim_subfiltrations(2))[$_]->TAG} (0...39));
+    # 00***, 10***, 01***, 11***, 0*0**, 1*0**, 0*1**, 1*1**, 0**0*, 1**0*, 0**1*, 1**1*, 0***0, 1***0, 0***1, 1***1, *00**, *10**, *01**, *11**, 
+    # *0*0*, *1*0*, *0*1*, *1*1*, *0**0, *1**0, *0**1, *1**1, **00*, **10*, **01*, **11*, **0*0, **1*0, **0*1, **1*1, ***00, ***10, ***01, ***11
+    # @return perl array of Filtration objects.
+    user_method all_codim_subfiltrations{
+        my ($filtration, $codim)=@_;
+        if ($codim == 0){return ($filtration);}
+        if ($codim < 0 || $filtration->POINTS->cols-1-$codim<2) {return ();}
+        my @subfiltrations = ();
+        my @patterns = all_patterns($codim, $filtration->POINTS->cols-1);
+        for my $pattern (@patterns){
+            push @subfiltrations, $filtration->subfiltration($pattern);
+        }
+        return @subfiltrations;
+    }
+
+    # @category Geometry
+    # Collects all subfiltrations of the given filtration 
+    # @example
+    # print $filtration->POINTS->cols-1;
+    # 5
+    # print scalar($filtration->all_subfiltrations);
+    # 131
+    # @return perl array of Filtration objects.
+    user_method all_subfiltrations{
+        my ($filtration) = @_;
+        my @subfiltrations = ();
+        push @subfiltrations, $filtration;
+        for (my $codim=1; $codim<$filtration->POINTS->cols-2; ++$codim){
+            my @patterns = all_patterns($codim, $filtration->POINTS->cols-1);
+            for my $pattern (@patterns){
+                push @subfiltrations, $filtration->subfiltration($pattern);
+            }
+        }
+        return @subfiltrations;
+    }
+   
+    # @category Geometry 
+    # Normalizes the given filtration: Divides all measurements by the euclidean norm of the height function induced by the original data. 
+    # @example ($Eble_normalized, $Eble_norm_factor) = $Eble->normalize;
+    # |norm factor: 223.036509685696
+    # @return perl array (Filtration, Float), the Float being the normalization factor.
+    user_method normalize{
+        my $fil = shift;
+        my @new_meas=();
+        my $norm_factor = sqrt(convert_to<Float>(sqr($fil->HEIGHTS)));
+        print STDOUT "norm factor: ", $norm_factor, "\n";
+        my $meas = $fil->MEASUREMENTS;
+        for (my $i=0; $i<$fil->POINTS->rows; ++$i){
+            for (my $j=0; $j<$meas->[$i]->size; ++$j){push @{$new_meas[$i]}, $meas->[$i]->[$j]/$norm_factor}
+        }
+        my $newname = join("", $fil->name, "Normalized");
+        return (new Filtration($newname,POINTS=>$fil->POINTS, MEASUREMENTS=>[@new_meas]),$norm_factor);
+    }
+
+    # Checks if the filtration itself is normalized, i.e. if the squared heightfunction sums up to 1.
+    # @return Bool 
+    user_method is_normalized{
+        my $fil = shift;
+        return convert_to<Float>(sqr($fil->HEIGHTS)) eq  1;
+    }
+
+    sub all_patterns{
+        my ($fixed_loci, $loci) = @_;
+        my @patterns = ();
+        my @results = ();
+        push @patterns, new Vector($fixed_loci);
+        for (my $no_ones =1; $no_ones<$fixed_loci; ++$no_ones){
+            my $hypersimplex = hypersimplex($no_ones, $fixed_loci);
+            my $verts = $hypersimplex->VERTICES;
+            for(my $i=0; $i<$verts->rows; ++$i){
+                push @patterns, $verts->row($i)->slice(~[0]);
+            }
+        }
+        push @patterns, ones_vector($fixed_loci);
+        my $kneser = kneser_graph($loci, $fixed_loci);
+        for (my $i=0; $i<$kneser->NODE_LABELS->size; ++$i){
+            my $string = $kneser->NODE_LABELS->[$i];
+            $string =~ s/[{,}]//g;
+            $string =~ s/ /,/g;
+            my @string = eval ($string);
+            for my $pattern (@patterns){
+                my @stars = ("*") x $loci;
+                for (my $j=0; $j<$pattern->dim; ++$j){
+                    $stars[$string[$j]]=$pattern->[$j];
+                }
+                push @results, join("", @stars);
+            }
+        }
+        return @results;
+    }
+    
+    sub check_01matrix{ 
+        my ($matrix) = @_; 
+        for (my $i=0; $i<$matrix->rows; ++$i){
+            for (my $j=0; $j<$matrix->cols; ++$j){
+                if ($matrix->[$i][$j]!=0 && $matrix->[$i][$j]!=0){
+                    die "not a 0/1 matrix\n";
+                }
+            }
+        }
+    }
+
+    sub k_element_subsets_of_n{
+        my ($n,$k)=@_;
+        my @bin_subsets = ();
+        my $node_labels = kneser_graph($n, $k)->NODE_LABELS;
+        for (my $j=0; $j<$node_labels->size ;++$j){
+            my $node_label = $node_labels->[$j];
+            $node_label=~s/([\{,\}])//g;
+            push @bin_subsets, new Array<Int>($node_label);    
+        }
+        return new Array<Array<Int>>(@bin_subsets);
+    }
+
+    sub get_signif_wallmatrices{
+        my ($fil, $subfil) = @_;
+        my $inducedsubsys = $subfil->AS_SUBSYSTEM;
+        my @wallmatrices = ();
+        for (my $i=0; $i<$subfil->CRITICAL_SIGNIFICANCES->size; ++$i){
+            if ($subfil->CRITICAL_SIGNIFICANCES->[$i] eq "significant"){
+                my $wall = new Array<Int>($subfil->CRITICAL_RIDGES->[$i]);
+                my @wallverts = ();
+                for (my $j=0; $j<$wall->size; ++$j){
+                    push @wallverts, $fil->POINTS->[$inducedsubsys->[$wall->[$j]]];
+                }
+                push @wallmatrices, new Matrix((new Matrix([@wallverts]))->minor(All, ~[0]));
+            }
+        }
+        return @wallmatrices;        
+    }
+
+    sub get_all_wallmatrices{
+        my ($fil, $subfil) = @_;
+        my $inducedsubsys = $subfil->AS_SUBSYSTEM;
+        my @wallmatrices = ();
+        for (my $i=0; $i<$subfil->CRITICAL_EPISTATIC_WEIGHTS->size; ++$i){
+                my $wall = new Array<Int>($subfil->CRITICAL_RIDGES->[$i]);
+                my @wallverts = ();
+                for (my $j=0; $j<$wall->size; ++$j){
+                    push @wallverts, $fil->POINTS->[$inducedsubsys->[$wall->[$j]]];
+                }
+                push @wallmatrices, new Matrix((new Matrix([@wallverts]))->minor(All, ~[0]));
+        }
+        return @wallmatrices;        
+    }
+
+    sub get_0vertexfigure{
+        my $dim = $_[0];
+        my @strings = ();
+        for (my $i=1; $i<$dim+1; ++$i){
+            my $string = "";
+            for (my $j=1; $j<$dim+1; ++$j){
+                if ($j!=$i){$string .= "*";}
+                else {$string .= "0";}
+            }
+            push @strings, $string;
+        }
+        return @strings;
+    }
+
+    method homogenous_starstrings{
+        my ($fil, $zeroone, $n) = @_;
+        my @starstrings = ();
+        for (my $i=1; $i<$n-1; ++$i){
+            my $fixed_stringarray = kneser_graph($n, $i)->NODE_LABELS;
+            for (my $j=0; $j<$fixed_stringarray->size ;++$j){
+                my $fixed_string = $fixed_stringarray->[$j];
+                $fixed_string=~s/([\{,\}])//g;
+                my $fixed_string_array = new Array<Int>($fixed_string);
+                my @stars = map {"*" } (0 .. $n-1);        
+                for (my $k=0; $k<$fixed_string_array->size; ++$k){
+                    @stars[$fixed_string_array->[$k]]=$zeroone;}
+                push @starstrings, join("", @stars);}}
+        return @starstrings;
+    }
+    
+    sub augment_by_one{
+        my (@arr) = @_;
+        my @aug=();
+        for(my $i=0; $i<scalar(@arr); ++$i){
+            push @aug, $arr[$i]+1;}
+        return @aug;
+    }
+
+    sub get_subfil_idx{
+    my $fil=shift;
+    my ($redtype, @nonstars_aug)=@_;
+    my $nonstarsArr_aug = new Array<Int>(@nonstars_aug);
+    my @idx=();
+    for (my $i=0; $i<$fil->POINTS->rows; ++$i){
+       if ($fil->POINTS->minor(All, ~[0])->row($i)->slice($nonstarsArr_aug) == $redtype){
+            push @idx, $i;}}
+    return @idx;
+    }
+ 
+
+    sub strtypecheck{
+        my $fil=shift;
+        my $str=$_[0];
+        if($fil->POINTS->cols-1!=length($str)){return 0}
+        $str=~s/([\*,0,1])//g;
+        if(length($str)>0){return 0;}
+        return 1;
+    }
+
+    method walls_exposedverts{
+    my $fil = shift;
+    my $simplices = $fil->BIPYRAMIDS;
+    my @walls  = ();
+    my @exposed_vert = ();
+    for (my $i=0; $i<$simplices->size(); ++$i) {
+        my $splxpair = $simplices->[$i];
+        my ($sat1, $wall, $sat2) = wall_fromlabels($splxpair->[0],$splxpair->[1]);
+        push @walls, new Set<Int>($wall);
+        push @exposed_vert, new Pair<Int,Int>($sat1,$sat2);}
+    return (new Array<Set<Int>>([@walls]), new Array<Pair<Int,Int>>([@exposed_vert]));
+    }
+
+    method lower_vols{
+    my $fil = shift;
+    my $edges = $fil->EDGES;
+    my $triang = $fil->MAXIMAL_CELLS;
+    my @int_projvols = ();
+    my @projvols = ();
+    for (my $i=0; $i<$edges->size(); ++$i) {
+        my $this_edge=$edges->[$i];
+        my ($first,$second)=@{$this_edge};
+        push @int_projvols, $fil->relnvol_fromlabels($triang->[$first]*$triang->[$second]);
+        my ($first_vol, $second_vol)= map{nvol($fil->POINTS->minor($_,All))} ($triang->[$first],$triang->[$second]);
+        push @projvols, new Pair<Int,Int>($first_vol, $second_vol);}
+    return  (new Array<Float>(@int_projvols), new Array<Pair<Int,Int>>([@projvols]));
+    }
+   
+    method relnvol_fromlabels{
+        my $fil = shift;
+        my $vert = $_[0];
+        my $intersection = new Polytope<Rational>(VERTICES => $fil->geno_coord($vert));
+        my $hn = $intersection->AFFINE_HULL->row(0)->slice(~[0]);
+        my $hn_norm = new Rational(eucl_norm($hn));
+        my $hn1 = new Vector<Rational>(1/$hn_norm * $hn); 
+        my $euclvol_pyra = convert_to<Float>(nvol($fil->geno_coord($vert)/(add_vec($fil->geno_coord($vert)->[0], $hn1))));
+        return $euclvol_pyra;    
+    }
+
+    method add_vec{
+        my $vec1 = $_[0];
+        my $vec2 = $_[1];
+        my $sum = new Vector<Rational>($vec1->dim);
+        $sum->[0]=1;
+        for(my $i=1; $i<$vec1->dim; ++$i){
+            $sum->[$i] = $vec1->[$i] + $vec2->[$i-1];}
+        return $sum;
+    }
+
+    method geno_coord{
+        my $fil = shift;
+        my $labels = $_[0];
+        return $fil->POINTS->minor($labels,All);
+    }
+
+    method partitions_modedges{
+        my $fil = shift;
+        my $edges = $fil->EDGES;
+        my @ind = map {$_} 0..($fil->MAXIMAL_CELLS->rows-1);
+        my @modedges =();
+        my $blobs = new Array<Set>(rows($fil->MAXIMAL_CELLS));
+        my @partitions = ();
+        for (my $i=0; $i<$edges->size(); ++$i) {
+            my $this_edge = $edges->[$i];
+            my ($first,$second)=@{$this_edge}; 
+            my ($lo,$hi)=($ind[$first],$ind[$second]);
+            if ($hi != $lo){
+                push @modedges, $i;
+                if ($lo>$hi) { my $tmp=$lo; $lo=$hi; $hi=$tmp; }
+                my ($lo_blob,$hi_blob) = ($blobs->[$lo], $blobs->[$hi]);
+                $blobs->[$lo] = $lo_blob+$hi_blob; # glue to lower
+                    $blobs->[$hi] = new Set();
+                for (my $k=0; $k<scalar(@ind); ++$k) {
+                    if($ind[$k]==$hi){$ind[$k]=$lo;}}}
+            push @partitions, kill_zeros($blobs);
+        }
+        return (new Array<Array<Set<Int>>>([@partitions]), new Array<Int>([@modedges]));    
+    }
+
+    method get_edges{
+        my $this = shift;
+        my $evals_edges = $this->evals_edges;
+        my @edges =();
+        for (my $j=0; $j<  $evals_edges->size(); ++$j) {
+            push @edges, $evals_edges->[$j]->second;}  
+        return (new Array<Set>([@edges]));
+    }
+
+    method get_evals{
+        my $this = shift;
+        my $evals_edges = $this->evals_edges;
+        my @evals =();
+        for (my $j=0; $j<  $evals_edges->size(); ++$j) {
+            push @evals, $evals_edges->[$j]->first;}
+        return new Array<Float>([@evals]);
+    }
+
+    method get_MAXIMAL_CELLS{
+        my $this = shift;
+        my $sop = new fan::SubdivisionOfPoints(POINTS=>$this->POINTS, WEIGHTS=>$this->HEIGHTS);
+        return $sop->MAXIMAL_CELLS;
+    }
+    
+    method evals_edges{
+        my $this = shift;
+        my $triangulation = $this->MAXIMAL_CELLS;
+        my $complex = new topaz::SimplicialComplex(FACETS=>rows($triangulation));
+        my $dual_edges = new Array<Set>($complex->DUAL_GRAPH->EDGES);
+        my @epi = ();
+        for (my $i=0; $i<$dual_edges->size(); ++$i) {
+            my $this_edge=$dual_edges->[$i];
+            my ($first,$second)=@{$this_edge};
+            my $val = $this->e_fromlabels($triangulation->[$first], $triangulation->[$second]);
+            my $this_pair = new Pair< Float, Set<Int> >($val,$this_edge);
+            push @epi, $this_pair;}
+        my @sorted_epi = sort  {$a->[0]<=>$b->[0]}  @epi;
+        my $epi = new Array< Pair< Float, Set<Int> >> ([@sorted_epi]);
+        return $epi;
+    } 
+    
+
+    method e_fromlabels{
+        my ($this, $vert1, $vert2)= @_;
+        my ($sat1, $vert_lowersplx, $sat2) = wall_fromlabels($vert1,$vert2);
+        my ($first_vol, $second_vol)= map{nvol($this->POINTS->minor($_,All))} ($vert1,$vert2);
+        my $rel = $this->relnvol_fromlabels($vert1*$vert2);
+        my $E_h = nvol($this->PHENOTOPE->minor($vert1+$vert2, All));
+        if($E_h<0){return -1}
+        my $e_h = convert_to<Float>($E_h * $rel /($first_vol*$second_vol)); # invariant formula
+            return $e_h;
+    }
+    
+    method wall_fromlabels{
+        my ($vert1, $vert2) = @_;
+        my $vert_lowersplx = $vert1*$vert2;
+        my ($sat1,$sat2) = @{$vert1+$vert2-$vert_lowersplx};
+        return($sat1,$vert_lowersplx,$sat2);
+    }
+
+    method nvol{
+        my $simplex = $_[0];
+        if ($simplex->rows!=$simplex->cols){print STDOUT "Not a triangulation \n";return -1;}
+        return abs(det($simplex));
+    }
+    
+    method cells_simplices{
+        my $fil = shift;
+        my $edges = $fil->EDGES;
+        my $triang = $fil->MAXIMAL_CELLS;
+        my (@cells,@simplices) = ((),());
+        for (my $j = 0; $j<$edges->size(); ++$j){
+            my ($first, $second) = @{$edges->[$j]};
+            my $paire = new Pair< Set<Int>, Set<Int>   > ($triang->[$first],$triang->[$second]);
+            push @simplices, $paire;
+            push @cells, $triang->[$first] +  $triang->[$second];}    
+        return new Array<Pair<Set,Set >>([@simplices]);
+    }
+    
+    method kill_zeros {
+        my $array = $_[0];
+        my @red_array =();
+        for (my $i=0; $i<$array->size(); ++$i){
+            if ($array->[$i]->size()>0){
+                my $tmp = new Set<Int>($array->[$i]);
+                push @red_array, $tmp;}}
+        return new Array<Set<Int>>([@red_array]);
+    }
+    
+    method eucl_norm{
+        my $vec = $_[0];
+        my $sum = 0;
+        for (my $i=0; $i<$vec->dim();++$i){
+            $sum += ($vec->[$i])**2;}
+        my $sumfloat = new Float($sum);
+        return sqrt($sumfloat);
+    }
+
+    method get_no_maxcells{
+        my $edges = $_[0];
+        my $no_maxcells = 0;
+        for(my $i=0; $i<$edges->size; ++$i){
+            $no_maxcells = max($no_maxcells,max($edges->[$i]->front, $edges->[$i]->back));}
+        return $no_maxcells+1;
+    }
+
+    method get_inc_matrix{
+        my $no_cells = $_[0];
+        my $edges = $_[1];
+        my $evals = $_[2];
+        my $inc_matrix = new Matrix<TropicalNumber<Min>>($no_cells, $no_cells);    
+        for(my $i=0; $i<$edges->size; ++$i){
+            $inc_matrix->[$edges->[$i]->front][$edges->[$i]->back]=$evals->[$i];
+            $inc_matrix->[$edges->[$i]->back][$edges->[$i]->front]=$evals->[$i]; }    
+        for(my $i=0; $i< $inc_matrix->rows; ++$i){$inc_matrix->[$i][$i]=0}
+        return $inc_matrix;
+    }
+
+    method get_metric{
+        my $inc_matrix = $_[0];
+#my $result = new Matrix<TropicalNumber<Min>>(unit_matrix($inc_matrix->rows));
+        my $result = $inc_matrix;
+        for(my $i=1; $i< $inc_matrix->rows-1; ++$i){
+            $result = $result * $inc_matrix;}
+        return $result;
+    }
+
+    method name_char{
+        my $fil = shift;
+        my $filname = $fil->name;
+        $filname =~ s/\*/s/g;
+        return $filname;
+    }
+
+}

@@ -1,0 +1,16 @@
+# This is a description file of a polymake extension rooted in this directory.
+# Please refer to the documentation under
+#   https://polymake.org/doku.php/extensions/filtration
+# for detailed explanations of its contents.
+
+# This version of the extension requires polymake 4.1.
+
+URI http://www.polymake.org/extensions/filtration
+
+NAME EpistaticFiltration
+
+CREDIT
+This is the software companion to the article:
+Holger Eble, Michael Joswig, Lisa Lamberti, and William B. Ludington,
+"Cluster partitions and fitness landscapes of the Drosophila fly microbiome",
+J. Math. Biol. 79.3, pp. 861–899. doi: 10.1007/s00285-019-01381-0.

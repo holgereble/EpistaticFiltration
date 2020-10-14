@@ -1,0 +1,228 @@
+#  Copyright (c) 2020
+#  Holger Eble (TU Berlin)
+#  Michael Joswig (TU Berlin and MPI MiS Leipzig)
+#  Lisa Lamberti (ETH Zuerich)
+#  William B. Ludington (Carnegie Science)
+
+#  This program is free software; you can redistribute it and/or modify it
+#  under the terms of the GNU General Public License as published by the
+#  Free Software Foundation; either version 2, or (at your option) any
+#  later version: http://www.gnu.org/licenses/gpl.txt.
+
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#-------------------------------------------------------------------------------
+
+custom $pvalue_significant=0.05;
+
+custom $pvalue_semisignificant=0.1;
+
+# path to the R program
+custom $R_executable;
+
+CONFIGURE {
+    find_program($R_executable, "R", { prompt => "the `R' program for statistics" });
+    my $success = sanity_check_R();
+    if ($success == 0){
+        print STDOUT "\n\nExtension 'Filtration':\n","ATTENTION! The R-package 'fdrtools' seems to be flawed! P-value computation is not available until you fix this. As soon as you got fdrtools working in R type reconfigure_extension(<PATH_TO_EXTENSION>); and restart polymake.\n\n";        
+    }
+    $success; 
+}
+
+sub sanity_check_R{
+    my $Rstatement = join ('','library(fdrtool);signif(phalfnorm(0.2,theta=sqrt(pi/2)*1/0.5, lower.tail=FALSE, log.p=FALSE),digits=3)');
+    my $expected_return_from_R = 0.689;
+    `echo "$Rstatement" > /tmp/Rtest.dat`;
+    my $result = `$R_executable  --no-save --quiet  < /tmp/Rtest.dat 2>/dev/null`;
+    $result = (split / /,(split "\n", $result)[1])[1];
+    `rm /tmp/Rtest.dat`;
+    return 1 if eval($result) == $expected_return_from_R;
+    return 0;
+}
+
+object Filtration {
+    
+    # @category Statistics
+    # Collects the standard errors of the measurements.
+    # The order of the vector is fitting the rows of the point matrix stored in the property POINTS.
+    property STANDARDERRORS: Vector<Rational>;
+
+    # @category Statistics
+    # Lifted genotope by the standard errors as additional last column.
+    property SETOPE: Matrix<Float>;
+
+    # @category Statistics
+    # Collects the p-values of the bipyramids chosen by the dual edges of the triangulation.
+    # The order of the array is by ascending epistatic weight.
+    # Computing this property requires the software R.
+    property PVALUES: Array<Float>;    
+
+    # @category Statistics
+    # Slice of the array PVALUES featuring critical edges only. 
+    # Redundant but useful property.  
+    property CRITICAL_PVALUES: Array<Float>;
+
+    # @category Statistics
+    # Records whether a critical dual edge is significant, semisignificant or not significant.
+    # A critical dual edge might be significant due to a non-critical edge. 
+    property CRITICAL_SIGNIFICANCES : Array<String>;
+
+    rule PVALUES: EPISTATIC_WEIGHTS, SETOPE{
+        $this->PVALUES = $this->get_pvals;
+    }
+
+    rule CRITICAL_PVALUES: PVALUES, CRITICAL_EDGES{
+        my $pvals = new Vector<Float>($this->PVALUES);
+        $this->CRITICAL_PVALUES = new Array<Float>($pvals->slice($this->CRITICAL_EDGES));
+    }
+
+    rule CRITICAL_SIGNIFICANCES: PVALUES, CRITICAL_EDGES {
+        my $significances = new Array<String>(get_significances($this->PVALUES, $this->CRITICAL_EDGES));
+        $this->CRITICAL_SIGNIFICANCES = $significances;
+    }
+
+    rule SETOPE: POINTS, STANDARDERRORS{
+        $this->SETOPE = $this->POINTS | $this->STANDARDERRORS;
+    }
+    
+    rule STANDARDERRORS : MEASUREMENTS {
+        $this->STANDARDERRORS = $this->get_standarderrors();
+    }
+    
+    method get_pvals{
+        my $fil = shift;
+        my $evals = $fil->EPISTATIC_WEIGHTS;
+        my $edges = $fil->EDGES;
+        my $sdtope = $fil->SETOPE;
+        my $triang = $fil->MAXIMAL_CELLS;
+        my @pvals=();
+        for (my $j=0; $j<$edges->size(); ++$j){
+            my $this_edge=$edges->[$j];
+            my ($first,$second)=@{$this_edge};
+            my $se_minor =new Matrix<Rational>($sdtope->minor( $triang->[$first]+$triang->[$second], All )); 	
+            my $Sigma = $fil->get_Sigma($se_minor, $first,$second, $triang);
+            push @pvals, get_pval($evals->[$j],$Sigma);}
+        return new Array<Float>(@pvals);
+    }
+    
+    method get_pval{
+        my $str_eval = $_[0];
+        my $str_Sigma = $_[1];
+        my $Rstatement = get_Rstatement($str_eval, $str_Sigma);
+        my $file ='/tmp/callR.dat';
+        open R_FILE, "> $file" or die join("cannot write to ", $file);
+        print R_FILE $Rstatement;
+        close R_FILE;
+        my $result = `$R_executable --no-save --quiet  < $file 2>/dev/null`; # The R_executable statement makes problems and I don't know why. 
+        return (split / /,(split "\n", $result)[1])[1];
+    }
+
+    sub get_Rstatement{
+        my $str_eval = $_[0];
+        my $str_Sigma = $_[1];
+        return join('','library(fdrtool);signif(phalfnorm(',$str_eval, ',theta=sqrt(pi/2)*1/',$str_Sigma, ', lower.tail=FALSE, log.p=FALSE),digits=3)');
+    }
+
+    method get_Sigma{
+        my $fil = shift;
+        my $se_minor = $_[0];
+        my $first = $_[1];
+        my $second = $_[2];
+        my $triang = $_[3];
+        my $Sigma=0;
+        my $rel = $fil->relnvol_fromlabels($triang->[$first]*$triang->[$second]); 
+        my ($first_vol, $second_vol)= map{nvol($fil->POINTS->minor($_,All))} ($triang->[$first],$triang->[$second]);
+        for(my $i=0; $i<$se_minor->rows; ++$i){
+            my $sigma = $se_minor->[$i][$se_minor->rows-1];
+            $Sigma += det($se_minor->minor(~[$i],~[$se_minor->rows-1]))**2* $sigma**2 *$rel**2/(($first_vol*$second_vol)**2);
+        }
+        return sqrt(convert_to<Float>($Sigma));    
+    }
+    
+    method get_Sigma_ofVert{
+        my $fil = shift;
+        my $se_minor = $_[0];
+        my $vert1 = $_[1];
+        my $vert2 = $_[2];
+        my $Sigma=0;
+        my $rel = $fil->relnvol_fromlabels($vert1*$vert2); 
+        my ($first_vol, $second_vol)= map{nvol($fil->POINTS->minor($_,All))} ($vert1,$vert2);
+        for(my $i=0; $i<$se_minor->rows; ++$i){
+            my $sigma = $se_minor->[$i][$se_minor->rows-1];
+            $Sigma += det($se_minor->minor(~[$i],~[$se_minor->rows-1]))**2* $sigma**2 *$rel**2/(($first_vol*$second_vol)**2);
+        }
+        return sqrt(convert_to<Float>($Sigma));    
+    }
+    
+    method get_means{
+        my $fil = shift;
+        my @heights =();
+        for (my $i=0; $i<$fil->MEASUREMENTS->size; ++$i){
+            push @heights, get_mean($fil->MEASUREMENTS->[$i]);}
+        return new Vector<Rational>(@heights);
+    }
+
+    method get_mean{
+        my $row = $_[0];
+        my $sum = 0;
+        for(my $i=0; $i<$row->size(); ++$i){
+            $sum += $row->[$i];}
+        return $sum/$row->size();
+    }
+
+    method get_variance{
+        my $row = $_[0];
+        my $mean = get_mean($row);
+        my $sum = 0;
+        for (my $i=0; $i<$row->size; ++$i){
+            $sum +=(($row->[$i]-$mean)**2);}
+        my $sumfloat = new Float($sum);    
+        return sqrt($sumfloat)/sqrt($row->size-1);    
+    }
+
+    method get_standarderror{
+        my $row = $_[0];
+        return get_variance($row)/sqrt($row->size);
+    }
+
+    method get_standarderrors{
+        my $fil = shift;
+        my @ses =();
+        for (my $i=0; $i<$fil->MEASUREMENTS->size; ++$i){
+            push @ses, get_standarderror($fil->MEASUREMENTS->[$i]);}
+        return new Vector<Rational>(@ses);
+    }
+}
+
+sub get_significances{
+    my ($pvalsarr, $critedges) = @_;
+    my $pvals = new Vector<Float>($pvalsarr);
+    my @significances = ();    
+    my @critedges = @{$critedges};
+    push @critedges, $pvals->dim;
+    my ($start, $end)=(0, $critedges->[0]);
+    for (my $i = 0; $i<scalar(@critedges)-1; ++$i){
+        my $sliced = $pvals->slice(range($start, $end));
+        if (minimum($sliced)<$pvalue_significant){
+            push @significances, "significant";
+        }
+        elsif (minimum($sliced)<$pvalue_semisignificant) {
+            push @significances, "semisignificant";}
+        else {push @significances, "cluster";}
+        ($start, $end) = ($critedges[$i]+1,$critedges[$i+2]-1);
+    }
+    return @significances; 
+}
+
+sub get_Rstatement{
+    my $str_eval = $_[0];
+    my $str_Sigma = $_[1];
+    return join('','library(fdrtool);signif(phalfnorm(',$str_eval, ',theta=sqrt(pi/2)*1/',$str_Sigma, ', lower.tail=FALSE, log.p=FALSE),digits=3)');
+}
+
+# Local Variables:
+# mode: perl
+# cperl-indent-level:4
+# End:

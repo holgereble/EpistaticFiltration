@@ -1,0 +1,89 @@
+#  Copyright (c) 2020
+#  Holger Eble (TU Berlin)
+#  Michael Joswig (TU Berlin and MPI MiS Leipzig)
+#  Lisa Lamberti (ETH Zuerich)
+#  William B. Ludington (Carnegie Science)
+
+#  This program is free software; you can redistribute it and/or modify it
+#  under the terms of the GNU General Public License as published by the
+#  Free Software Foundation; either version 2, or (at your option) any
+#  later version: http://www.gnu.org/licenses/gpl.txt.
+
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#-------------------------------------------------------------------------------
+object Filtration{
+
+    property TREEORDER: Array<Int>;
+
+    rule TREEORDER, CRITICAL_EDGES: EDGES, MAXIMAL_CELLS{
+            ($this->TREEORDER, $this->CRITICAL_EDGES) = $this->get_treeorder_and_critedges;
+    }
+
+    # @category Geometry
+    # Computes the order of the outer nodes of the binary tree that arises from merging maximal 
+    # cells along the dual edges, ordered by ascending epistatic weight. 
+    # The chosen unique order is induced by the lex-order of the node sets of binary trees being merged. 
+    # As a byproduct we get the critical edges of the filtration.
+    # At any stage, the forest is stored in the variable @partition.
+    method get_treeorder_and_critedges{
+        my $fil = shift;
+        my ($edges, $triang) = ($fil->EDGES, $fil->MAXIMAL_CELLS);    
+        my @ind = map {$_} 0..($triang->rows-1);
+        my ($ind_ref,$partition_ref);
+        my @partition =();
+        my @crit_edges =();
+        for (my $i=0;$i<$triang->rows;++$i){push @{$partition[$i]}, $i;}
+        for (my $i=0; $i<$edges->size(); ++$i) {
+            my ($first,$second)=@{$edges->[$i]};
+            my ($lo,$hi)=($ind[$first],$ind[$second]);# encodes the partition
+            if ($hi != $lo){
+                push @crit_edges, $i;
+                if ($lo>$hi) { my $tmp=$lo; $lo=$hi; $hi=$tmp; }
+                if(clusterset($triang, $partition[$lo])<clusterset($triang, $partition[$hi])){# lex-order determines merging order
+                    ($ind_ref,$partition_ref) = merge_bintrees($lo,$hi,\@ind,\@partition);
+                }
+                else{
+                    ($ind_ref,$partition_ref) = merge_bintrees($hi,$lo,\@ind,\@partition);
+                }
+                @ind = @{$ind_ref};
+                @partition = @{$partition_ref};
+            }
+        }
+        for(my $i=0;$i<scalar(@partition);++$i){
+            if(scalar(@{$partition[$i]})>0){
+                return (new Array<Int>([@{$partition[$i]}]), new Array<Int>([@crit_edges]));
+            }
+        }
+    }   
+
+    sub merge_bintrees{
+        my ($a, $b, $ind_ref, $partition_ref) = @_;
+        my @ind = @{$ind_ref};
+        my @partition = @{$partition_ref};
+        push @{$partition[$a]}, @{$partition[$b]}; #merge tree $b on the right of tree $a
+        @{$partition[$b]} = (); 
+        for (my $k=0; $k<scalar(@ind); ++$k) {
+            if($ind[$k]==$b){$ind[$k]=$a;}
+        }
+        return (\@ind,\@partition);
+    }
+
+    sub clusterset{
+        my ($triang, $partitionset_ref)=@_;
+        my @resultset = ();
+        my @partitionset = @{$partitionset_ref};
+        for(my $i=0; $i<scalar(@partitionset); ++$i){
+            push @resultset, @{$triang->[$partitionset[$i]]}
+        }
+        return new Set([@resultset]);
+    }
+}
+
+# Local Variables:
+# mode: perl
+# cperl-indent-level:4
+# End:
+

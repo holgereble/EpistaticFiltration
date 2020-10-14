@@ -1,0 +1,399 @@
+#  Copyright (c) 2020
+#  Holger Eble (TU Berlin)
+#  Michael Joswig (TU Berlin and MPI MiS Leipzig)
+#  Lisa Lamberti (ETH Zuerich)
+#  William B. Ludington (Carnegie Science)
+
+#  This program is free software; you can redistribute it and/or modify it
+#  under the terms of the GNU General Public License as published by the
+#  Free Software Foundation; either version 2, or (at your option) any
+#  later version: http://www.gnu.org/licenses/gpl.txt.
+
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#-------------------------------------------------------------------------------
+object Paralleltransport{
+
+    # The source filtration (s) of the parallel transport.  
+    property SOURCE_FILTRATION: Filtration;
+    
+    # The target filtration (t) of the parallel transport. Parallel epistatic weights and parallel p-values are the metric data for the target filtration.
+    # They arise out of the dual graph/bipyramids of s and are computed with the height function of t. 
+    property TARGET_FILTRATION: Filtration;
+
+    # @category Geometry
+    # Matrix<Float> with two columns: column 0 lists the parallel epistatic weights, column 1 lists the parallel p-values. 
+    # Row k is the parallel information of edge k in the source filtration s.
+    property TARGET_DATA: Matrix<Float>;
+
+    # @category Geometry
+    # Fraction (parallel epistatic weight)/(original epistatic weight), critical edges (of s) only.
+    # The ordering of the array is the same as the ordering of the critical edges of s, i.e. by ascending epistatic weight.
+    property EVAL_QUOTIENTS : Array<Float>;
+    
+    # @category Statistics 
+    # Rather redundant property: Stores significant/semisignificant/non-significant for any parallel epistatic weight by simply evaluating the parallel p-values. 
+    property CRITICAL_TARGET_SIGNIFICANCES : Array<String>;
+   
+    # @category Geometry
+    # 0th column of TARGET_DATA, thus redundant. 
+    property TARGET_EPISTATIC_WEIGHTS : Array<Float>;
+    
+    # @category Statistics
+    # 1th column of TARGET_DATA, thus redundant.
+    property TARGET_PVALUES : Array<Float>;
+    
+    rule TARGET_EPISTATIC_WEIGHTS: TARGET_DATA{
+        $this->TARGET_EPISTATIC_WEIGHTS = new Array<Float>($this->TARGET_DATA->col(0));
+    }
+    
+    rule TARGET_PVALUES: TARGET_DATA{
+        $this->TARGET_PVALUES = new Array<Float>($this->TARGET_DATA->col(1));
+    }
+    
+    rule EVAL_QUOTIENTS: SOURCE_FILTRATION, TARGET_DATA{
+        $this->EVAL_QUOTIENTS = $this->get_eval_quotients();
+    }
+
+    rule CRITICAL_TARGET_SIGNIFICANCES: SOURCE_FILTRATION, TARGET_DATA{
+        $this->CRITICAL_TARGET_SIGNIFICANCES = $this->get_crit_tar_signifs();
+    }
+    
+    # @category Visual
+    # Constructs a filtration diagram for the source filtration and stores it in the folder /tmp/.   
+    user_method visual_source{
+       my $pt = $_[0];
+       fil_to_tex($pt->SOURCE_FILTRATION);}
+    
+    # @category Visual
+    # Constructs a bar diagram for the parallel epistatic weights and parallel p-values and stores it in the folder /tmp/.
+    # Every row in these target-bar-diagrams has one row. It's left end starts at the parallel epistatic weight (x-value). 
+    # Its color is directly derived from the parallel p-value.
+    user_method visual_target{
+        my $pt = shift;
+        my ($mode, $cnt, $diff)=@_;
+        targetdata_to_tex($pt->SOURCE_FILTRATION, $pt, $mode);
+    }
+   
+    # @category CSV 
+    # Stores an analysis table of the parallel transport, featuring original/parallel e-/p-weights e.g., both as csv and tex in the folder /tmp/.  
+    # @param Matrix as the underlying points of the source (and the target) filtration or a bigger point configuration it was derived from, e.g. by calling $source=$filtration->subfiltration("1****") and $target = $filtration->subfiltration("0****");
+    user_method analysis_tables{
+        my ($pt,$motherpoints)=@_;
+        my $ptname=$pt->name;
+        my $s=$pt->SOURCE_FILTRATION;
+        $ptname=~s/\*/star/g;
+        my $name = make_name_readable_tex($ptname);
+        my $filename=join ("", "/tmp/analyze_",$ptname, "_table.csv");
+        my $texname=join ("", "/tmp/analyze_",$ptname, "_table.tex");
+        my @texlines=();
+        my $edge_label=$s->MAXIMAL_CELLS->rows-1;
+        open OUT,"> $filename"   or die "cannot write to $filename\n";
+        open TEX,"> $texname"   or die "cannot write to $texname\n";
+        print OUT join(",","bipyramid", "parallel type", "e_source", "e_target", "e_quot=e_source/e_target", "p_source", "p_target", "p_quot=p_source/p_target"), "\n"; 
+        init_tex_tables($name);
+        my $tar_pvals = new Vector<Float>($pt->TARGET_DATA->col(1));
+        my $crit_tar_signifs=$pt->CRITICAL_TARGET_SIGNIFICANCES;
+        my $crit_source_signifs=$s->CRITICAL_SIGNIFICANCES;
+        my %type_hash=(0 => "red/red", 1 => "blue/blue", 2 => "red/blue", 3 => "blue/red");
+        for (my $edge_id=0; $edge_id<$s->EDGES->size; ++$edge_id){
+            my $crit_edge_id=-1;
+            for(my $i=0; $i<$s->CRITICAL_EDGES->size; ++$i){
+                if($s->CRITICAL_EDGES->[$i]== $edge_id){$crit_edge_id=$i; last;}
+            }
+            my $bipyram_bit=get_bipyram_bitstring($s, $edge_id, $motherpoints);
+            my $bipyram_type=get_bipyramid_signif_type($s->PVALUES->[$edge_id],$pt->TARGET_PVALUES->[$edge_id]);
+            my $type="";
+            my $e_source=sprintf("%.3f", $s->EPISTATIC_WEIGHTS->[$edge_id]);
+            my $e_target=sprintf("%.3f", $pt->TARGET_EPISTATIC_WEIGHTS->[$edge_id]);
+            my $e_quot;
+            if ($e_target eq "0.000"){
+                $e_quot="\$\\infty\$";
+            }
+            else {
+                $e_quot= sprintf("%.3f", $s->EPISTATIC_WEIGHTS->[$edge_id]/$pt->TARGET_EPISTATIC_WEIGHTS->[$edge_id]);
+            }
+            my $p_source=sprintf("%.3f", $s->PVALUES->[$edge_id]);
+            my $p_target=sprintf("%.3f", $pt->TARGET_PVALUES->[$edge_id]);
+            my $p_quot;
+            if ($p_target eq "0.000"){
+                $p_quot="\$\\infty\$";
+            }
+            else{
+                $p_quot= sprintf("%.3f", $s->PVALUES->[$edge_id]/$pt->TARGET_PVALUES->[$edge_id]);
+            }
+            print OUT join(",", $bipyram_bit,  $type, $e_source, $e_target, $e_quot, $p_source, $p_target, $p_quot), "\n"; 
+            $bipyram_bit=~s/{/\\{/g;
+                $bipyram_bit=~s/}/\\}/g;
+            $bipyram_bit=~s/;/,/g;
+            if ($crit_edge_id>=0){#critical case
+                my $type = get_type_critical($s->CRITICAL_SIGNIFICANCES->[$crit_edge_id], $pt->CRITICAL_TARGET_SIGNIFICANCES->[$crit_edge_id]);
+                my $texline = join ("&", "\\multicolumn{1}{r}{\\tiny \\textbf{$edge_label}}" , " \\multicolumn{1}{l}{\\tiny $bipyram_bit} ", "\\multicolumn{1}{l}{\\tiny $type}"," \\multicolumn{1}{l}{\\tiny $e_source} ", " \\multicolumn{1}{l}{\\tiny $e_target} ", " \\multicolumn{1}{l}{\\tiny $e_quot} ", " \\multicolumn{1}{l}{\\tiny $p_source} ", " \\multicolumn{1}{l}{\\tiny $p_target} ", " \\multicolumn{1}{l}{\\tiny $p_quot} "). "\\\\ \n";
+                push @texlines, $texline;
+                --$edge_label;
+            }
+            else{#non-critical case
+                if ($s->PVALUES->[$edge_id]>=$pvalue_significant && $tar_pvals->[$edge_id]>=$pvalue_significant){next}
+                my ($prec_crit_id, $succ_crit_id)=get_prec_and_succ_crit($edge_id, $s->CRITICAL_EDGES);
+                my $type=get_type_noncritical($s->PVALUES->[$edge_id], $tar_pvals->[$edge_id]);
+                my $p_source_str="$p_source";
+                if($p_source<$pvalue_significant && $s->CRITICAL_PVALUES->[$prec_crit_id]<$pvalue_significant && $s->CRITICAL_PVALUES->[$succ_crit_id]){$p_source_str="\\textbf{$p_source}"};
+
+                my $texline = join ("&","", " \\multicolumn{1}{l}{\\tiny $bipyram_bit} ", "\\multicolumn{1}{l}{\\tiny $type}"," \\multicolumn{1}{l}{\\tiny $e_source} ", " \\multicolumn{1}{l}{\\tiny $e_target} ", " \\multicolumn{1}{l}{\\tiny $e_quot} ", " \\multicolumn{1}{l}{\\tiny $p_source_str} ", " \\multicolumn{1}{l}{\\tiny $p_target} ", " \\multicolumn{1}{l}{\\tiny $p_quot} "). "\\\\ \n";
+                push @texlines, $texline;
+            }
+        }
+        print_texlines(\@texlines, %type_hash); 
+
+        print TEX "   \\end{table}
+    \\end{document}";
+    close OUT;
+    print STDOUT "Parallel analysis csv file written to $filename.\n";
+    close TEX;
+    print STDOUT "Parallel analysis tex file written to $texname.\n";
+    }
+
+    # @category Geometry
+    # returns the product model corresponding to a paralleltransport 
+    # Input: two filtrations  $s and $t with the same genotope P. 
+    # A new filtration is created according to the product model described in our article. 
+    # As new genotope we have (P 0/P 1), and similarly for the standard errors 
+    # Output: new Filtration with parallel faces given by $s and $t 
+    user_method product_model{ 
+        my $pt=shift;
+        my $ptname = $pt->name;
+        $ptname =~ s/\*/star/g;
+        my($s,$t)=($pt->SOURCE_FILTRATION, $pt->TARGET_FILTRATION);
+        my $s_meas=$s->MEASUREMENTS;
+        my $t_meas=$t->MEASUREMENTS;
+        my $n_loci=$s->POINTS->cols-1;# assume biallelic
+        my @segment = @{new Vector($s->POINTS->rows)}; 
+        push @segment, @{ones_vector($t->POINTS->rows)}; 
+        my $new_points = ($s->POINTS/$t->POINTS)|new Vector(@segment); 
+        my ($new_heights,$new_meas) = split_parallel_heights($s->HEIGHTS, $t->HEIGHTS, $s_meas, $t_meas);
+        return new Filtration(join("","productmodel",$ptname),POINTS=>$new_points, MEASUREMENTS=>$new_meas);
+    }
+    
+    method get_eval_quotients{
+        my $pt = shift;
+        my $fil = $pt->SOURCE_FILTRATION;
+        my @quotients = ();
+        for (my $i=0; $i<$fil->CRITICAL_EDGES->size; ++$i){
+            push @quotients, $pt->TARGET_DATA->[$fil->CRITICAL_EDGES->[$i]][0]/$fil->EPISTATIC_WEIGHTS->[$fil->CRITICAL_EDGES->[$i]];
+        }
+        return new Array<Float>([@quotients]);
+    }
+
+    method get_crit_tar_signifs{
+        my $pt=shift;
+        my @modes = get_target_significances($pt->TARGET_DATA->col(1), $pt->SOURCE_FILTRATION->CRITICAL_EDGES);
+        return new Array<String>([@modes]);
+    }
+    sub get_prec_and_succ_crit{
+        my ($edge_id, $s_crit_edges)=@_;
+        for (my $i=0;$i<$s_crit_edges->size; ++$i){
+            if ($s_crit_edges->[$i]){return ($i-1,$i)}
+
+        }
+    }
+
+    sub make_name_readable_tex{
+        my ($name)=$_[0];
+        $name=~s/\*/\$\{\\ast\}\$/g;
+        $name=~s/star/\$\{\\ast\}\$/g;
+        $name=~s/TO/ \$\\rightarrow\$ /g;
+        $name=~s/Normalized/ /g;
+        $name=~s/Lud2017SurvData/Gould/g;
+        $name=~s/Lud2017FlygutCFUsData/GouldCFU/g;
+        $name=~s/Lud2017FlygutCFUsData_log10/GouldCFU_log10/g;
+        $name=~s/_log10/\\_log10/g;
+        $name=~s/Lud2018SurvData/Eble/g;
+        return join("" , $name, );
+    }
+
+    sub get_type_noncritical{
+        my ($s_pval, $t_pval)=@_;
+        if ($s_pval<$pvalue_significant && $t_pval>=$pvalue_significant){return "blue/red"}
+        elsif ($s_pval>=$pvalue_significant && $t_pval<$pvalue_significant){return "red/blue"}
+        elsif ($s_pval>=$pvalue_significant && $t_pval>=$pvalue_significant){return "red/red"}
+        elsif ($s_pval<$pvalue_significant && $t_pval<$pvalue_significant){return "blue/blue"}
+    }
+
+    sub get_type_critical{
+        my ($s_signif, $t_signif)=@_;
+        my $result = join("/", $s_signif, $t_signif);
+        $result=~s/semisignificant/red/g;
+        $result=~s/significant/blue/g;
+        $result=~s/cluster/red/g;
+        return $result;
+    }
+
+    sub print_texlines{
+        my ($texlines_ref, %type_hash)=@_;
+        my @texlines=@$texlines_ref;
+        print_tex_opensubtable();
+        foreach my $texline (@texlines){
+            print TEX $texline;
+        }
+        print_tex_closesubtable();
+    }
+
+    sub get_bipyramid_signif_type{
+        my ($source_pval, $target_pval)=@_;
+        if ($source_pval>=$pvalue_significant && $target_pval>=$pvalue_significant){return 0} #{return "redtored"}
+        elsif ($source_pval<$pvalue_significant && $target_pval<$pvalue_significant){return 1}#{return "bluetoblue"}
+        elsif ($source_pval>=$pvalue_significant && $target_pval<$pvalue_significant){return 2}#{return "redtoblue"}
+        {return 3}; #return "bluetored";
+    }
+
+    sub init_tex_tables{
+        my $name=$_[0];
+        print TEX "\\documentclass[a4paper, 11pt]{amsart}
+    \\usepackage{caption}
+    \\usepackage{subcaption}
+    \\usepackage{standalone}
+    \\usepackage{booktabs}
+    \\begin{document}"; 
+        print TEX "\\begin{table}[b]
+        \\caption{\\small Parallel analysis $name, non-critical red/red-case omitted.}\n";                
+    }
+
+    sub print_tex_opensubtable{
+        print TEX "\\begin{tabular*}{1.17\\linewidth}{\@{\\extracolsep{\\fill}}lllllllll\@{}}
+    \\toprule";
+    print TEX "  \\multicolumn{1}{l}{\\tiny No.} &  \\multicolumn{1}{l}{\\tiny bipyramid} & \\multicolumn{1}{l}{\\tiny type} &  \\multicolumn{1}{l}{\\tiny \$e_s\$} & \\multicolumn{1}{l}{\\tiny \$e_t\$} & \\multicolumn{1}{l}{\\tiny \$e_s/e_t\$} & \\multicolumn{1}{l}{\\tiny \$p_s\$} & \\multicolumn{1}{l}{\\tiny \$p_t\$} & \\multicolumn{1}{l}{\\tiny \$p_s/p_t\$} \\\\ \n \\midrule  \n";        
+    }
+
+    sub print_tex_closesubtable{
+        print TEX  "\\bottomrule \\end{tabular\*}";
+    }
+    sub get_parallel_type{
+        my ($crit_source_signifs, $crit_tar_signifs, $crit_edge_no)=@_;
+        my $s_sig=$crit_source_signifs->[$crit_edge_no];
+        my $t_sig=$crit_tar_signifs->[$crit_edge_no];
+        my %sig_hash=(
+                "cluster" => "red",
+                "semisignificant" => "red",
+                "significant" => "blue",
+                );
+        return join("", $sig_hash{$s_sig}, "/", $sig_hash{$t_sig});
+    }
+
+    sub get_target_significances{
+        my ($t_pvals, $s_crit_edges)=@_;
+        my @tar_signifs=();
+        for(my $crit_edge_id=0; $crit_edge_id<$s_crit_edges->size; ++$crit_edge_id){
+            my $edge_id=$s_crit_edges->[$crit_edge_id];
+            if ($t_pvals->[$edge_id]<$pvalue_significant){push @tar_signifs, "significant"}        
+            elsif ($t_pvals->[$edge_id]<$pvalue_semisignificant){push @tar_signifs, "semisignificant"}        
+            else {push @tar_signifs, "cluster"}        
+        } 
+        return @tar_signifs;      
+    }
+
+}
+
+# Computes and returns the paralleltransport from $sourcefil to $targetfil. Function call: parallel_transport($source, $target)
+# @example  
+# $Eble_normalized_0ssss = $Eble_normalized->subfiltration("0\*\*\*\*"); (without \)
+# $Eble_normalized_1ssss = $Eble_normalized ->subfiltration("1*\*\*\*\"); 
+# $pt = parallel_transport($Eble_normalized_0ssss, $Eble_normalized_1ssss);
+# print $pt->SOURCE_FILTRATION->TAG;
+# |0****
+# @return big object of type Paralleltransport
+user_function parallel_transport(Filtration, Filtration){
+    my $sourcefil = $_[0];
+    my $targetfil = $_[1];
+    my $sourceevals = $sourcefil->EPISTATIC_WEIGHTS;
+    my @epairs = ();
+    my @pvals = ();
+    my @targetevals = ();
+    my $sourcefil_simplices = $sourcefil->BIPYRAMIDS;
+    for(my $i=0; $i<$sourcefil_simplices->size(); ++$i){
+        my $epair = new Pair <Float,Float>($sourceevals->[$i],$targetfil->e_fromlabels($sourcefil_simplices->[$i]->[0],$sourcefil_simplices->[$i]->[1]));
+        push @epairs,$epair;
+        push @targetevals, $epair->[1];
+        my $target_sdtope = $targetfil->SETOPE;
+        my $se_minor =new Matrix<Rational>($target_sdtope->minor( $sourcefil_simplices->[$i]->[0]+$sourcefil_simplices->[$i]->[1], All ));
+        my $target_Sigma = $targetfil->get_Sigma_ofVert($se_minor, $sourcefil_simplices->[$i]->[0],$sourcefil_simplices->[$i]->[1]);
+        my $target_eval = $targetfil->e_fromlabels($sourcefil_simplices->[$i]->[0],$sourcefil_simplices->[$i]->[1]);
+        push @pvals, get_pval_help($target_eval, $target_Sigma);
+    }
+    my $vectargetevals = new Vector<Float>([@targetevals]);
+    my $vecpvals = new Vector<Float>([@pvals]);
+    my $evalsmatrix = new Matrix<Float>($vectargetevals);
+    my $pvalsmatrix = new Matrix<Float>($vecpvals);
+    #my $pt = new Paralleltransport(join("", $sourcefil->name, "TO", $targetfil->name) , TARGET_DATA => transpose($evalsmatrix)|transpose($pvalsmatrix)); #somehow SOURCE_FILTRATION => $sourcefil runs into trouble...
+my $pt = new Paralleltransport(join("", $sourcefil->name, "TO", $targetfil->name) , SOURCE_FILTRATION => $sourcefil, TARGET_FILTRATION=>$targetfil, TARGET_DATA => transpose($evalsmatrix)|transpose($pvalsmatrix));
+        return $pt;
+}
+
+# P is the genotope underlying $source_fil and $target_fil.
+# Q is \{0,1\}
+sub split_parallel_heights{
+    my ($source_heights, $target_heights, $s_meas, $t_meas)=@_;
+    my $composed_heights=new Vector($source_heights|$target_heights);
+    my @v_prime_meas=();
+    my @v_prime=();
+    my @v_p = compute_v_p($source_heights, $target_heights); #negative
+    my @v_q = compute_v_q($source_heights, $target_heights, $composed_heights);#negative
+    my $pos=0;
+    for(my $i=0; $i<$source_heights->dim; ++$i){# fill in P\times\{0\}
+        push @v_prime, $source_heights->[$i]-$v_p[$i]-$v_q[0];
+        for(my $j=0; $j<$s_meas->[$i]->size; ++$j){
+            push @{$v_prime_meas[$pos]}, $s_meas->[$i]->[$j]+$v_p[$i]+$v_q[0];
+        }
+        ++$pos;
+    }      
+    for(my $i=0; $i<$target_heights->dim; ++$i){# fill in P\times\{1\}
+        push @v_prime, $target_heights->[$i]-$v_p[$i]-$v_q[1];
+        for(my $j=0; $j<$t_meas->[$i]->size; ++$j){
+            push @{$v_prime_meas[$pos]}, $t_meas->[$i]->[$j]+$v_p[$i]+$v_q[1];
+        }
+        ++$pos;
+    }      
+    return (new Vector(@v_prime), new Array<Array<Rational>>([@v_prime_meas]));
+}
+
+sub compute_v_p{
+    my ($source_heights, $target_heights)=@_;
+    my @v_p=();
+    for (my $i=0; $i<$source_heights->dim; ++$i){
+        push @v_p, 1/2*($source_heights->[$i]+$target_heights->[$i]);
+    }
+    return @v_p;
+}
+
+sub compute_v_q{
+    my ($source_heights, $target_heights, $composed_heights)=@_;
+    my @v_q=();
+    for (my $i=0; $i<2; ++$i){
+        my $sum_p =0;
+        for (my $p=0; $p<$source_heights->dim; ++$p){
+            $sum_p+=$composed_heights->[$p+$i*$source_heights->dim]
+        }
+        push @v_q, 1/$source_heights->dim*$sum_p;
+    }
+    return @v_q;
+}
+
+sub get_pval_help{ 
+    my $str_eval = $_[0]; 
+    my $str_Sigma = $_[1]; 
+    my $Rstatement = get_Rstatement($str_eval, $str_Sigma); 
+    my $file ='/tmp/callR.dat'; 
+    open R_FILE, "> $file" or die join("cannot write to ", $file); 
+    print R_FILE $Rstatement; 
+    close R_FILE; 
+    my $result = `R --no-save --quiet  < $file 2>/dev/null`; 
+    return (split / /,(split "\n", $result)[1])[1]; 
+} 
+
+# Local Variables:
+# mode: perl
+# cperl-indent-level:4
+# End:
+
+

@@ -1,0 +1,81 @@
+#  Copyright (c) 2020
+#  Holger Eble (TU Berlin)
+#  Michael Joswig (TU Berlin and MPI MiS Leipzig)
+#  Lisa Lamberti (ETH Zuerich)
+#  William B. Ludington (Carnegie Science)
+
+#  This program is free software; you can redistribute it and/or modify it
+#  under the terms of the GNU General Public License as published by the
+#  Free Software Foundation; either version 2, or (at your option) any
+#  later version: http://www.gnu.org/licenses/gpl.txt.
+
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#-------------------------------------------------------------------------------
+
+object Filtration{
+
+    # Computes the fundamental circuits and their attributes like order and magnitude, critical interactions/dual edges/bipyramids only. 
+    # The returned arrays are all ordered by ascending epistatic weight.
+    # @return a 3-tuple, ordered by epistatic weight: 
+    # [0]: support as Array<Array<Int>> reference, also known as fundamental circuit of the underlying bipyramid
+    # [1]: magnitudes of the fundamental circuits as Array<Int> reference
+    # [2]: the orders of the fundamental magnitudes as Array<Int> reference
+    method get_circuit_data{
+        my $fil = shift;
+        my @interaction_orders = ();
+        my $simplices = new Vector<Pair<Set,Set>>($fil->BIPYRAMIDS);
+        my $critsimplices = $simplices->slice($fil->CRITICAL_EDGES);
+        my ($fund_circuits, $magnitudes) = get_fundamental_circuits($fil->POINTS, $critsimplices);
+        for(my $i=0; $i<$fund_circuits->size; ++$i){
+            my $fund_matrix = new Matrix<Rational>($fil->POINTS->minor($fund_circuits->[$i],~[0]));
+            push @interaction_orders, interaction_order($fund_matrix);
+        }
+        return ($fund_circuits,$magnitudes, new Array<Int>([@interaction_orders]));
+    }
+
+    sub get_fundamental_circuits{
+        my ($points, $critsimplices) = @_;
+        my (@circuits, @magnitudes)=((),());
+        for(my $i=0; $i<$critsimplices->dim; ++$i){
+            my ($first, $sec) = ($critsimplices->[$i]->first, $critsimplices->[$i]->second);
+            my $intersection = $first*$sec;
+            my ($exp1, $exp2) = ($first-$intersection, $sec-$intersection);
+            my (@rows, @fund_circuit) = ((),());
+            push @rows, $exp1->[0];
+            my $intersectionarr = new Array<Int>($intersection);  
+            for(my $j=0; $j<$intersectionarr->size; ++$j){push @rows, $intersectionarr->[$j];}
+            push @rows, $exp2->[0];
+            my $minor = new Matrix<Rational>($points->minor([@rows],All));
+            for(my $j=0; $j<$minor->rows; ++$j){
+                my $laplace = new Matrix<Rational>($minor->minor(~[$j], All));
+                if (det($laplace)!=0){push @fund_circuit, $rows[$j];}
+            }
+            push @circuits, new Array<Int>([@fund_circuit]);
+            push @magnitudes, scalar(@fund_circuit);
+        }
+        return (new Array<Array<Int>>([@circuits]), new Array<Int>([@magnitudes]));
+    }
+
+    sub interaction_order{
+        my $matrix = $_[0];#non-homogenized coordinates
+        my @const_cols = ();
+        for (my $j=0; $j<$matrix->cols; ++$j){
+            my $tmp_contr=1;
+            for (my $i=0; $i<$matrix->rows-1; ++$i){
+                if ($matrix->[$i][$j]!= $matrix->[$i+1][$j]){$tmp_contr=0;last;}
+            }
+            if ($tmp_contr==1){push @const_cols, $j};
+        }
+        return $matrix->cols-scalar(@const_cols);
+    }
+
+}
+
+# Local Variables:
+# mode: perl
+# cperl-indent-level:4
+# End:
+

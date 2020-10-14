@@ -1,0 +1,90 @@
+#  Copyright (c) 2020
+#  Holger Eble (TU Berlin)
+#  Michael Joswig (TU Berlin and MPI MiS Leipzig)
+#  Lisa Lamberti (ETH Zuerich)
+#  William B. Ludington (Carnegie Science)
+
+#  This program is free software; you can redistribute it and/or modify it
+#  under the terms of the GNU General Public License as published by the
+#  Free Software Foundation; either version 2, or (at your option) any
+#  later version: http://www.gnu.org/licenses/gpl.txt.
+
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#-------------------------------------------------------------------------------
+
+# A big object of type 'Filtration' assembles various numbers and other mathematical objects which can be computed from 
+# a) the induced height function/triangulation (geometric) and 
+# b) statistical information given by the measurements.
+declare object Filtration : PointConfiguration<Rational> {
+
+    # @topic category properties/Statistics
+    # The properties in this category represent statistical information related to the filtration.
+    
+    # @topic category methods/Visual
+    # The methods in this category serve for visualizing (some parts of the) filtration, mostly via TeX/Tikz.
+    
+    # @topic category functions/Visual
+    # The functions in this category serve for visualizing (some parts of the) filtration, mostly via TeX/Tikz.
+    
+    # @topic category functions/CSV
+    # The functions in this category serve for creating analysis tables in the csv file format.
+    
+    # @topic category methods/CSV
+    # The methods in this category serve for creating analysis tables in the csv file format.
+    
+    # @topic category methods/EpistaticLandscapes
+    # The methods in this category serve for dealing with the epistatic landscape of a filtration, which is an enriched dual graph.
+    
+    # @topic category functions/MetaEpistaticChart
+    # The functions in this category serve for visualizing (some parts of the) filtration, mostly via TeX/Tikz.
+    
+    # @topic category properties/Geometry
+    # The properties in this category represent geometric information related to the filtration.
+
+}
+
+
+declare object Paralleltransport{
+
+    # @topic category properties/Geometry
+    # Properties represention geometric properties which relate the source filtration to.
+
+    # @topic category properties/Statistics
+    # Properties represention statistical properties which relate the source filtration to.
+
+    # @topic category methods/Visual
+    # The methods in this category serve for visualizing (some parts of the) filtration, mostly via TeX/Tikz.
+
+    # @topic category functions/Visual
+    # The functions in this category serve for visualizing (some parts of the) filtration, mostly via TeX/Tikz.
+
+    # @topic category functions/CSV
+    # The functions in this category serve for creating analysis tables in the csv file format.
+
+    # @topic category methods/CSV
+    # The methods in this category serve for creating analysis tables in the csv file format.
+
+}
+
+declare object EpistaticGraph;
+
+INCLUDE
+filtration_properties.rules
+filtration.rules
+statistics.rules
+tree.rules
+tex.rules    
+csv.rules    
+circuits.rules
+paralleltransport.rules 
+user_functions_various.rules
+epistatic_landscape.rules
+metaepistaticchart.rules
+
+# Local Variables:
+# mode: perl
+# cperl-indent-level:4
+# End:

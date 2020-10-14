@@ -1,0 +1,177 @@
+#  Copyright (c) 2020
+#  Holger Eble (TU Berlin)
+#  Michael Joswig (TU Berlin and MPI MiS Leipzig)
+#  Lisa Lamberti (ETH Zuerich)
+#  William B. Ludington (Carnegie Science)
+
+#  This program is free software; you can redistribute it and/or modify it
+#  under the terms of the GNU General Public License as published by the
+#  Free Software Foundation; either version 2, or (at your option) any
+#  later version: http://www.gnu.org/licenses/gpl.txt.
+
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#-------------------------------------------------------------------------------
+
+object Filtration{
+
+    # @category EpistaticLandscapes
+    # Stores a tex/tikz file to /tmp/ containing the dual graph of the filtration plus some extra information (edge colors, edge lables).
+    # To  each    dual  edge  we  associate  an epistatic weight (opacity of the edge; linearly ascending), a p-value (edge colors; blue:significant, purple:semisignificant, red:not significant) and an integer number (edge label) which refers to the ordering of the critical dual edges as they occur during the filtration process. The degree sequence assembles the node degrees of the graph. Significant edges usually have low edge labels.
+    user_method visual_epistatic_landscape{
+        my $fil=shift;
+        my $graph_path = join ("", "/tmp/epistatic+landscape_", $fil->name_char, "_parse.tex"); 
+        my $degree_sequence = save_dualgraph($fil, $graph_path);
+        my $path = join ("", "/tmp/epistatic+landscape_", $fil->name_char, ".tex"); 
+        open OUT,"> $path";
+        my $tex_file = get_landscape_tex($fil, $graph_path);        
+        print OUT $tex_file;
+        close OUT;
+        print STDOUT "The landscape has degree sequence $degree_sequence and was written to $path.\n";
+    }
+
+    # @category EpistaticLandscapes
+    # Stores a tex/tikz file to /tmp/ containing the critical spanning tree of the filtration plus some extra information (edge colors, edge lables).
+    # To  each    dual  edge  we  associate  an epistatic weight (opacity of the edge; linearly ascending), a p-value (edge colors; blue:significant, purple:semisignificant, red:not significant) and an integer number (edge label) which refers to the ordering of the critical dual edges as they occur during the filtration process. The degree sequence assembles the node degrees of the graph. Significant edges usually have low edge labels. The critical spanning tree arises out of the epistatic landscape by removing all non-critical dual edges.
+    user_method visual_critical_spanningtree{
+        my $fil=shift;
+        my $graph_path = join ("", "/tmp/epistatic+landscape_", $fil->name_char, "_parse.tex"); 
+        save_dualgraph($fil, $graph_path);
+        my $critical_tree = critical_spanningtree($fil);
+        my $degree_sequence = $critical_tree->DEGREE_SEQUENCE;
+        my $path = join ("", "/tmp/critical+spanningtree_", $fil->name_char, ".tex"); 
+        open OUT,"> $path";
+        my $tex_file = get_landscape_tex($fil, $graph_path);        
+        $tex_file =~ s/(\d*.\d*)\/dotted/0\/dotted/g;
+        print OUT $tex_file;
+        close OUT;
+        print STDOUT "The critical spanningtree has degree sequence $degree_sequence and was written to $path.\n";
+    }
+
+    # @category EpistaticLandscapes
+    # Restricts the epistatic landscape to the critical edges only. 
+    # @return Returns a big object of type Graph<Undirected>.
+    user_method critical_spanningtree{
+        my ($fil) =shift;
+        my @crit_spanningtree = ();
+        for(my $i=0; $i<$fil->EDGES->size; ++$i){
+            my $crit_edge_id = check_critical($i,$fil->CRITICAL_EDGES);
+            if ($crit_edge_id>=0){
+                push @{$crit_spanningtree[$fil->EDGES->[$i]->front]},$fil->EDGES->[$i]->back;
+                push @{$crit_spanningtree[$fil->EDGES->[$i]->back]},$fil->EDGES->[$i]->front;
+            }
+        }
+        my $inc = new IncidenceMatrix([@crit_spanningtree]);
+        my $critical_tree =  new graph::Graph<Undirected>(ADJACENCY=>$inc);
+        my $degree_sequence = $critical_tree->DEGREE_SEQUENCE;    
+        return $critical_tree;
+    }
+    
+    sub save_dualgraph{
+        my ($fil, $graph_path)=@_;
+        my $sc = new topaz::SimplicialComplex(FACETS=>rows($fil->MAXIMAL_CELLS));
+        my $dg = $sc->DUAL_GRAPH;
+        my $degree_sequence = $dg->DEGREE_SEQUENCE;
+        tikz($dg->VISUAL, File=>$graph_path);
+        return $degree_sequence; 
+    }
+
+
+    sub get_landscape_tex{
+        my ($fil, $graph_path) = @_;
+        my $tex_file = get_landscape_naked_tex($graph_path); 
+        $tex_file .= tex_tikzset();
+        $tex_file .= tex_edges($fil);    
+        $tex_file .= tex_nodes($fil);
+        $tex_file .= tex_edgelabels($fil);
+        $tex_file .= "\\end{tikzpicture}\n\\end{document}";
+        return $tex_file;    
+    }
+    
+    sub get_landscape_naked_tex{
+        my ($graph_path)=@_;
+        my $tex_file = "\\documentclass[tikz,x11names,border=10pt]{standalone}
+        \\usetikzlibrary{3d}
+        \\usetikzlibrary{snakes}
+        \\usetikzlibrary{arrows}
+        \\usetikzlibrary{shapes}
+        \\usetikzlibrary{backgrounds}
+        \\usetikzlibrary{calc}
+        \\begin{document}";
+        my $graph_tex = `cat $graph_path`;
+        my $close_tex  = "\\end{document}";
+        $tex_file .=$graph_tex.=$close_tex;
+        $tex_file =~ s/(%\ EDGES.*)document}//s;
+        $tex_file =~ s/(v\d+)_unnamed__1/$1/g;
+        $tex_file =~ s/\\definecolor\{pointcolor_unnamed__1\}\{rgb\}\{\ 1,0,0\ \}/\\definecolor\{pointcolor_unnamed__1\}\{rgb\}\{\ 0,0,0\ \}/g;
+        $tex_file .= "\n\n";
+        return $tex_file;
+    }
+
+    sub tex_tikzset{
+        return "\\tikzset{\ncluster\/.style = {red},\nsignificant\/.style = {blue},\nsemisignificant\/.style = {purple}}\n\n";
+    }
+
+    sub tex_edgelabels{
+        my $fil = shift;
+        my $cnt = $fil->CRITICAL_EDGES->size + 1;
+        my $edge_labels_tex = "";
+        foreach my $crit_edge_id (@{$fil->CRITICAL_EDGES}){
+            --$cnt;
+            my @v = @{$fil->EDGES->[$crit_edge_id]};
+            $edge_labels_tex .= "\\node at (\$0.5*(v$v[0])+0.5*(v$v[1])\$) [text=black, inner sep=0.5pt, draw=none, align=left] {\\footnotesize $cnt};\n";
+        }
+        return $edge_labels_tex;
+    }
+
+    sub tex_edges{
+        my $fil = $_[0];
+        my $edges_tex =  join ("","\\foreach \\x\\y\\c\\o\\m in {\n");
+        my $opacity = 0.12;
+        my $opacity_step =(1-0.12)/($fil->CRITICAL_EDGES->size-1) ;
+        my @strings = ();
+        for(my $i=0; $i<$fil->EDGES->size; ++$i){
+            my $crit_edge_id = check_critical($i,$fil->CRITICAL_EDGES);
+            my $x = $fil->EDGES->[$i]->front;
+            my $y = $fil->EDGES->[$i]->back;
+            my $c = get_signif($i, $crit_edge_id, $fil);
+            my $m = "";
+            $m = "dotted" if $crit_edge_id<0;
+            if ($crit_edge_id<0){push @strings, join ("",$x,"\/",$y,"\/",$c,"\/",$opacity,"\/",$m);}
+            else{push @strings, join ("",$x,"\/",$y,"\/",$c,"\/",$opacity,"\/",$m);
+                $opacity= sprintf("%.3f", $opacity+$opacity_step)}
+        }
+        $edges_tex .= join (",", @strings);
+        $edges_tex .= "}{\n\\draw[linestyle_unnamed__1, line width=2pt,\\c, opacity=\\o, \\m] (v\\x) -- (v\\y);\n}\n";
+        return $edges_tex;
+    }
+
+	sub tex_nodes{
+	    my $fil = $_[0];
+	    return join ("", "\\foreach \\x in {0,1,...,", $fil->MAXIMAL_CELLS->rows-1, "}{
+	            \\fill[pointcolor_unnamed__1] (v\\x) circle (3 pt);\n}\n"), "\n";
+	}
+
+	sub get_signif{ 
+	    my ($edge_id, $crit_edge_id, $fil)=@_; 
+	    if ($crit_edge_id>-1){return $fil->CRITICAL_SIGNIFICANCES->[$crit_edge_id]} 
+	    else{ 
+	        if($fil->PVALUES->[$edge_id]<$pvalue_significant){return "significant"} 
+	        elsif($fil->PVALUES->[$edge_id]<$pvalue_semisignificant){return "semisignificant"} 
+	        else{return "cluster"}; 
+	    } 
+	} 
+
+	sub check_critical{ 
+	    my ($i,$critedges)=@_; 
+	    for(my $j=0; $j<$critedges->size; ++$j){ 
+	        return $j if $critedges->[$j]==$i; 
+	    } 
+	    return -1; 
+	}
+
+}
+
+

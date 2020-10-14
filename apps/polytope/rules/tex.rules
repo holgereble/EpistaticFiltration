@@ -1,0 +1,751 @@
+#  Copyright (c) 2020
+#  Holger Eble (TU Berlin)
+#  Michael Joswig (TU Berlin and MPI MiS Leipzig)
+#  Lisa Lamberti (ETH Zuerich)
+#  William B. Ludington (Carnegie Science)
+
+#  This program is free software; you can redistribute it and/or modify it
+#  under the terms of the GNU General Public License as published by the
+#  Free Software Foundation; either version 2, or (at your option) any
+#  later version: http://www.gnu.org/licenses/gpl.txt.
+
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#-------------------------------------------------------------------------------
+
+object Filtration {
+
+    # @category Visual
+    # Computes the underlying binary tree and stores the filtration diagram (y-axis: dual egdes, x-axis: e-weights) to /tmp/.   
+    user_method visual{
+        my $fil = shift;
+        fil_to_tex($fil);
+        select STDOUT;
+    }
+    
+    # @category Visual 
+    # Diagram style of visualizing basic statistics of the filtrations: number of significant interactions per dimension. 
+    user_method percentages_to_tex{
+        my $fil = shift;
+        my @faces = map {$_->TAG} $fil->all_subfiltrations;
+        my $filname = $fil->name;
+        my $file_tex = "/tmp/percentages_$filname.tex";
+        open OUT,"> $file_tex"; select OUT;
+        print OUT "\\documentclass[crop,tikz]{standalone}\n\n
+        \\begin{document}\n\n
+        \\begin{tikzpicture}[yscale=3, scale=2]
+        \\tikzset{
+            tick/.style = {black, thick},
+            tick_thin/.style = {black, thin}}
+        \\draw[line width=0.03mm, gray ,step=0.2] (0.9,0) grid (5,1);
+        \\foreach \\x in {2,...,5} {
+            \\draw[tick,black,thin] (\\x,-0.05) -- (\\x,0);
+            \\node at (\\x,-0.1) [below,black] { \\small \$\\x\$ };}    
+        \\foreach \\y in {0,0.2,0.4,0.6,0.8,1} {
+            \\draw[tick,black,thin] (0.9,\\y) -- (1,\\y);
+            \\node at (0.8,\\y) [left,black] {\\small \$\\y\$ };}
+            \\node at (2.5,-0.2) [left,black] {face dimension};
+        \\node at (0.2,0.4) [rotate=90] {\\% of significant interactions };";
+        print OUT join("", "\\node at (2,1.2) [left,black] {\\Large ", $fil->name,"};\n");
+        for my $subfilstring (@faces){
+            if(length($subfilstring)==0){$subfilstring = "*" x $fil->DIM};
+            my $subfil = $fil->subfiltration($subfilstring);
+            my $no_critedges = $subfil->CRITICAL_EDGES->size;
+            my $no_signif = 0;
+            for (my $i=0; $i<$subfil->CRITICAL_SIGNIFICANCES->size; ++$i){
+                if($subfil->CRITICAL_SIGNIFICANCES->[$i] eq "significant"){++$no_signif;}
+            }
+            my $percentage = sprintf("%.3f", $no_signif/$no_critedges);
+            my $dim = $subfil->POINTS->cols-1;
+            print OUT join("","\\draw [black, thick] (",$dim," , ",$percentage,") node {\$\\bullet\$};\n");
+            print OUT join("", "\\node at (", $dim, " , ", $percentage, ") [right,black] {\\tiny ", $subfilstring,"};\n\n");
+        }
+        my $no_critedges = $fil->CRITICAL_EDGES->size;
+        my $no_signif = 0;
+        for (my $i=0; $i<$fil->CRITICAL_SIGNIFICANCES->size; ++$i){
+            if($fil->CRITICAL_SIGNIFICANCES->[$i] eq "significant"){++$no_signif;}
+        }
+        my $percentage = sprintf("%.3f", $no_signif/$no_critedges);
+        my $dim = $fil->POINTS->cols-1;
+        print OUT "\\end{tikzpicture}\n \\end{document}";        
+        close OUT;
+        select STDOUT;
+        print "percentages tex file written to $file_tex \n";
+        }
+    }
+
+	sub get_ones_aug{
+	    my $ones_arr = $_[0];
+	    my @ones_aug = ();
+	    for (my $i=0; $i<$ones_arr->size; ++$i){
+	        push @ones_aug, $ones_arr->[$i]+1;
+	    }
+	    return @ones_aug;
+	}
+
+    sub targetdata_to_tex{
+        my ($sourcefil, $pt_target, $mode, $cnt, $diff) = @_;
+        my $targetmatrix = $pt_target->TARGET_DATA;
+        my $crit_targetedges = new Matrix<Float>($targetmatrix->minor(new Set($sourcefil->CRITICAL_EDGES),All));
+        my $file = join('', "/tmp/targetbars_",$pt_target->name);
+        my ($file_tex,$file_pdf) = (join('',$file, '.tex'),join('', $file, '.pdf'));
+        open OUT,"> $file_tex"   or die "cannot write to $file_tex";select OUT;
+        write_targettex($sourcefil, $crit_targetedges, $pt_target->name, $pt_target, $mode, $cnt, $diff);
+        close OUT;
+        select STDOUT;
+        print "The target bars were written to $file_tex.\n";
+    }
+
+    sub write_targettex{
+        my ($sourcefil, $crit_matrix, $target_name, $pt_target, $mode, $cnt, $diff)  = @_;
+        if($mode ne "no_introoutro"){print_tex_header();}
+        my $biggest_e=ceil(maximum($crit_matrix->col(0)));
+        print_begin_figure_normalized($sourcefil->AMBIENT_DIM,$biggest_e,$crit_matrix->rows+1,$cnt);
+        print_begin_tikzpicture_normalized($sourcefil->AMBIENT_DIM,$biggest_e,$crit_matrix->rows+1);
+        print_target_bars_normalized($crit_matrix, $pt_target);
+        print_coordinate_system_normalized($sourcefil->AMBIENT_DIM,$biggest_e,$crit_matrix->rows+1);
+        print_end_figure($target_name, "Target", $cnt, $diff);
+        if($mode ne "no_introoutro"){print_end_document();}
+    }
+
+    sub print_target_bars_normalized{
+        my ($crit_matrix,$pt) = @_;
+        my $no_crit = $crit_matrix->rows;
+        my $crit_tar_signifs=$pt->CRITICAL_TARGET_SIGNIFICANCES;
+        my @color_pattern_bars=@{$pt->CRITICAL_TARGET_SIGNIFICANCES};
+        for (my $crit_edge_id=0; $crit_edge_id<$no_crit; ++$crit_edge_id){
+            print OUT "\n\n  \\coordinate (offset) at (",convert_to<Float>($crit_matrix->[$crit_edge_id][0]),", ",$no_crit-$crit_edge_id,");\n";
+            print OUT "\n \\draw[$color_pattern_bars[$crit_edge_id]] (\$ (offset) \$)-- (\$ (offset)  + (10*\\clusterlength,0) \$);\n";
+            print OUT " \\draw[tick] (\$ (offset) + (0,\\flagfacup\*\\lw) \$) -- (\$ (offset) - (0,\\flagfacdown\*\\lw) \$);";
+        }
+    }
+
+	sub print_target_bars{
+	    my $crit_matrix = $_[0];
+	    my $sourcefil = $_[1];
+	    my $pt_target = $_[2];
+	    return; #
+	        my $no_crit = $crit_matrix->rows;
+	    my @modes = get_significances($pt_target->TARGET_DATA->col(1), $sourcefil->CRITICAL_EDGES);
+	    for (my $i=0; $i<$no_crit; ++$i){
+	        print OUT "\n\n  \\coordinate (offset) at (",convert_to<Float>($crit_matrix->[$i][0]),", ",$no_crit-$i,");\n";
+	        print OUT "\n \\draw[$modes[$i]] (\$ (offset) \$)
+	            -- (\$ (offset)  + (10*\\clusterlength,0) \$);\n";
+	        print OUT " \\draw[tick] (\$ (offset) + (0,\\lw) \$) -- (\$ (offset) - (0,2\*\\lw) \$);";}
+	}
+
+    sub write_filtex{
+        my ($fil) = @_;
+        print_tex_header();
+        my ($maxepi, $maxclusters) = (ceil($fil->CRITICAL_EPISTATIC_WEIGHTS->[$fil->CRITICAL_EPISTATIC_WEIGHTS->size-1]),$fil->CRITICAL_EDGES->size+1);
+        my $biggest_e_weight= sprintf("%.4f", $fil->CRITICAL_EPISTATIC_WEIGHTS->[$fil->CRITICAL_EPISTATIC_WEIGHTS->size-1]);
+        if($biggest_e_weight<0.5){
+            print_begin_figure_normalized($fil->AMBIENT_DIM, $biggest_e_weight, $maxclusters);
+            print_begin_tikzpicture_normalized($fil->AMBIENT_DIM, $biggest_e_weight, $maxclusters);
+            print_first_tex_line_normalized($fil->MAXIMAL_CELLS->rows, $fil->CRITICAL_SIGNIFICANCES->[0]);
+            print_partitions($fil);
+            print_coordinate_system_normalized($fil->AMBIENT_DIM, $biggest_e_weight, $maxclusters);
+            print_end_figure_normalized($fil->name);;    
+        } 
+        else{
+            print_begin_figure($maxepi, $maxclusters);
+            print_begin_tikzpicture($maxepi, $maxclusters);
+            print_first_tex_line($fil->MAXIMAL_CELLS->rows, $fil->CRITICAL_SIGNIFICANCES->[0]);
+            print_partitions($fil);
+            print_coordinate_system($maxepi, $maxclusters);
+            print_end_figure($fil->name);    
+        } 
+        print_end_document();
+    }   
+
+    sub fil_to_tex{
+        my ($fil) = @_;   
+        my $file = join('', "/tmp/filtrationbars_", $fil->name);
+        my ($file_tex,$file_pdf) = (join('',$file, '.tex'),join('', $file, '.pdf'));
+        open OUT,"> $file_tex"   or die "cannot write to $file_tex";select OUT;
+        write_filtex($fil);
+        close OUT;
+        select STDOUT;
+        print "The filtration was written to $file_tex.\n\n";
+    }
+   
+    sub print_partitions{
+        my $fil = $_[0];
+        my @setsordered = ();
+        for(@{$fil->TREEORDER}){push @setsordered, new Set<Int>($_);}
+        my $edges = $fil->EDGES;
+        my $evals = $fil->EPISTATIC_WEIGHTS;
+        my $current = $fil->MAXIMAL_CELLS->rows;
+        my @color_pattern_bars=@{$fil->CRITICAL_SIGNIFICANCES};
+        for(my $crit_edge_id=0; $crit_edge_id<$fil->CRITICAL_EDGES->size;++$crit_edge_id){
+            my $edge_id=$fil->CRITICAL_EDGES->[$crit_edge_id];
+            my ($cell1,$cell2,$epi_weight) = ($edges->[$edge_id]->front, $edges->[$edge_id]->back, $evals->[$edge_id]);
+            my $idx1 =  get_ind_of_cell($cell1,\@setsordered);
+            my $idx2 =  get_ind_of_cell($cell2,\@setsordered);
+            if($idx2<$idx1){my $tmp=$idx2; $idx2=$idx1; $idx1=$tmp;}#we always want idx1\leq$idx2
+            die_if_incorrect($idx1, $idx2, \@setsordered, $edge_id);#reality check
+            @setsordered = glue_hi_to_lo($idx1,$idx2,\@setsordered);
+            print_tex_line(\@setsordered, $edge_id, $color_pattern_bars[$crit_edge_id], $fil->EPISTATIC_WEIGHTS);
+            --$current;
+        }
+    }
+   
+    sub print_tex_line{
+        my ($setsordered,$edge_id, $signif, $evals)=@_;
+        my @setsordered=@{$setsordered};
+        my $e_weight = $evals->[$edge_id];
+        my $cnt = get_number_of_clusters(\@setsordered);
+        print OUT "\n\\coordinate (offset) at (",convert_to<Float>($e_weight),", ",$cnt,");\n";
+        print OUT "\\foreach \\nclusters\\ngaps/\\size in {";
+        my ($length, $gaps, $start, $first)=(0,0,0,1);
+        for(@setsordered){
+            if($_->size>0 ){
+                $length =$_->size;
+                if($first!=1){
+                    print OUT ", ";}
+                print OUT join("",$start, "/",$gaps, "/", $length);       
+                $start = $start +$length;
+                ++$gaps;$first=0;}}
+        print_tex_draw_cluster($signif);
+    }
+    
+    sub print_tex_draw_cluster{ #cluster, significant or semisignificant
+        my ($signif) = @_;
+        print OUT "}{\n 
+        \\draw[$signif] (\$ (offset) + (\\nclusters*\\clusterlength,0) + (\\ngaps*\\clusterspace,0) \$) 
+        -- (\$ (offset) + (\\nclusters*\\clusterlength,0) + (\\ngaps*\\clusterspace,0) + (\\size*\\clusterlength,0) \$);}\n";
+        print OUT " \\draw[tick] (\$ (offset) + (0,\\flagfacup*\\lw) \$) -- (\$ (offset) - (0,\\flagfacdown*\\lw) \$);";
+    }
+    
+    sub get_number_of_clusters{
+        my @setsordered = @{$_[0]};
+        my $cnt = 0;
+        for(@setsordered){
+            if($_->size>0){++$cnt;}}
+        return $cnt;}
+    
+    sub glue_hi_to_lo{
+        my $idx1 =$_[0];
+        my $idx2 =$_[1];
+        my @setsordered = @{$_[2]};
+        my $low = new Set<Int> ($setsordered[$idx1]+$setsordered[$idx2]);
+        my $high = new Set<Int>();    
+        $setsordered[$idx1]=$low;
+        $setsordered[$idx2]=$high;
+        return (@setsordered);}
+    
+    sub die_if_incorrect{
+        my $idx1=$_[0];
+        my $idx2=$_[1];
+        my @setsordered = @{$_[2]};
+        my $i = $_[3];
+        for(my $j=$idx1+1; $j<$idx2;++$j){
+            if($setsordered[$j]->size>0){
+                die $i, " computed ordering is wrong!";}
+            }
+    }
+    
+    sub get_ind_of_cell{
+        my $cell = $_[0];
+        my @setsordered = @{$_[1]};
+        for (my $i=0; $i<scalar(@setsordered); ++$i){
+            my $set= $setsordered[$i];
+            if ($set->contains($cell)){
+            return $i;
+            }
+        }
+        return -1;
+    }
+    
+    sub print_first_tex_line{
+        my ($number_of_cells,$signif) = @_;
+        print OUT "\\coordinate (offset) at (",0,", ",$number_of_cells,");\n";
+        print OUT "\\foreach \\nclusters\\ngaps/\\size in {";
+        for(my $j=0; $j<$number_of_cells;++$j){
+            if ($j< $number_of_cells-1){print OUT join("",$j, "/",$j, "/", 1, ", ");}
+            else {print OUT join("",$j, "/",$j, "/", 1);}}
+        print OUT "}{\n
+        \\draw[$signif] (\$ (offset) + (\\nclusters*\\clusterlength,0) + (\\ngaps*\\clusterspace,0) \$) 
+        -- (\$ (offset) + (\\nclusters*\\clusterlength,0) + (\\ngaps*\\clusterspace,0) + (\\size*\\clusterlength,0) \$);}\n";
+        print OUT " \\draw[tick] (\$ (offset) + (0,\\lw) \$) -- (\$ (offset) - (0,2*\\lw) \$);";
+    }
+
+    sub print_first_tex_line_normalized{
+        my ($number_of_cells,$signif) = @_;
+        print OUT "\\coordinate (offset) at (",0,", ",$number_of_cells,");\n";
+        print OUT "\\foreach \\nclusters\\ngaps/\\size in {";
+        for(my $j=0; $j<$number_of_cells;++$j){
+            if ($j< $number_of_cells-1){print OUT join("",$j, "/",$j, "/", 1, ", ");}
+            else {print OUT join("",$j, "/",$j, "/", 1);}}
+        print OUT "}{\n
+        \\draw[$signif] (\$ (offset) + (\\nclusters*\\clusterlength,0) + (\\ngaps*\\clusterspace,0) \$) 
+        -- (\$ (offset) + (\\nclusters*\\clusterlength,0) + (\\ngaps*\\clusterspace,0) + (\\size*\\clusterlength,0) \$);}\n";
+        print OUT " \\draw[tick] (\$ (offset) + (0,\\flagfacup*\\lw) \$) -- (\$ (offset) - (0,\\flagfacdown*\\lw) \$);";
+    }
+    
+    sub print_begin_figure{
+        my ($maxepi, $maxclusters) = @_;
+        my $lw = "3pt";
+        my $cl = "3pt";
+        my $flagfacup=2.9;
+        my $flagfacdown=5;
+        if ($maxclusters<80){$flagfacup=2.5; $flagfacdown=4}
+        if($maxclusters<12){$lw="6pt"; $cl="5pt"; $flagfacup=1.2; $flagfacdown=2;}
+        if ($maxclusters<5){$lw="7pt"; $cl="8pt";}
+        print "\\newcommand\\maxepi{$maxepi}
+        \\newcommand\\maxclusters{$maxclusters}
+        \\newcommand\\clusterlength{$cl}
+        \\newcommand\\clusterspace{0.1}
+        \\newcommand\\flagfacup{$flagfacup}
+        \\newcommand\\flagfacdown{$flagfacdown}
+        \\newcommand\\lw{$lw}\n\n";
+    }
+   
+    sub print_begin_figure_normalized{
+        my ($dim, $maxepi, $maxclusters,$cnt) = @_; 
+        if ($dim==5){
+            print "\\newcommand\\maxepi{$maxepi}
+            \\newcommand\\maxclusters{$maxclusters}
+            \\newcommand\\clusterlength{0.05pt}
+            \\newcommand\\clusterspace{0.025pt}
+            \\newcommand\\flagfacup{2.9}
+            \\newcommand\\flagfacdown{5}
+            \\newcommand\\lw{3pt}\n\n";
+        }
+        if ($dim==4 && $maxepi>0.1){
+            print "\\newcommand\\maxepi{$maxepi}
+            \\newcommand\\maxclusters{$maxclusters}
+            \\newcommand\\clusterlength{0.33pt}
+            \\newcommand\\clusterspace{0.13pt}
+            \\newcommand\\flagfacup{2.5}
+            \\newcommand\\flagfacdown{4}
+            \\newcommand\\lw{3pt}\n\n";
+        }
+        if ($dim==4 && $maxepi>0.048 && $maxepi<=0.1){
+            print "\\newcommand\\maxepi{$maxepi}
+            \\newcommand\\maxclusters{$maxclusters}
+            \\newcommand\\clusterlength{0.2pt}
+            \\newcommand\\clusterspace{0.1pt}
+            \\newcommand\\flagfacup{2.5}
+            \\newcommand\\flagfacdown{4}
+            \\newcommand\\lw{3pt}\n\n";
+        }
+        if ($dim==4 && $maxepi<=0.048){
+            print "\\newcommand\\maxepi{$maxepi}
+            \\newcommand\\maxclusters{$maxclusters}
+            \\newcommand\\clusterlength{0.1pt}
+            \\newcommand\\clusterspace{0.05pt}
+            \\newcommand\\flagfacup{2.5}
+            \\newcommand\\flagfacdown{4}
+            \\newcommand\\lw{3pt}\n\n";
+        }
+        if ($dim==3){
+            print "\\newcommand\\maxepi{$maxepi}
+            \\newcommand\\maxclusters{$maxclusters}
+            \\newcommand\\clusterlength{0.4pt}
+            \\newcommand\\clusterspace{0.1pt}
+            \\newcommand\\flagfacup{1.2}
+            \\newcommand\\flagfacdown{2}
+            \\newcommand\\lw{6pt}\n\n";
+        }
+    }
+ 
+    sub print_begin_tikzpicture{
+        my $maxepi = $_[0];
+        my $maxclusters = $_[1];
+        my ($xscale,$yscale, $scale) = (1,1,1);
+        if($maxclusters>50){($xscale,$yscale,$scale) = (1.7, 0.5, 0.36);}
+        elsif($maxclusters>10){($xscale,$yscale,$scale) = (1.8, 0.5,0.4);}
+        elsif($maxclusters<11){($xscale,$yscale,$scale) = (0.6, 0.5,0.8);}
+        elsif($maxclusters<5){($xscale,$yscale,$scale) = (0.8, 0.5,0.8);}
+        #($xscale,$yscale, $scale) = (1.9,5,0.07);# for small diagrams
+        print "\\begin{tikzpicture}[yscale=$yscale,xscale=$xscale, scale = $scale]
+        \\tikzset{
+        cluster\/.style = {red, line width=\\lw, join=round},
+        significant\/.style = {blue, line width=\\lw, join=round},
+        semisignificant\/.style = {purple, line width=\\lw, join=round},
+        tick/.style = {black, thick},
+        tick_thin/.style = {black, thin}}\n\n";
+    }
+    
+    sub print_begin_tikzpicture_normalized{
+        my ($dim, $maxepi, $maxclusters) = @_;
+        if ($dim==5){
+            print "\\begin{tikzpicture}[yscale=0.5,xscale=130, scale = 0.36]\n";
+        }
+        if ($dim==4 && $maxepi>0.1){
+            print "\\begin{tikzpicture}[yscale=0.5,xscale=30, scale = 0.4]\n";
+        }
+        if ($dim==4 && $maxepi>0.048 && $maxepi<=0.1){
+            print "\\begin{tikzpicture}[yscale=0.5,xscale=45, scale = 0.4]\n";
+        }
+        if ($dim==4 && $maxepi<=0.048){
+            print "\\begin{tikzpicture}[yscale=0.5,xscale=95, scale = 0.4]\n";
+        }
+        if ($dim==3){
+            print "\\begin{tikzpicture}[yscale=0.5,xscale=50, scale = 0.8]\n";
+        }
+        print "\\tikzset{
+        cluster\/.style = {red, line width=\\lw, join=round},
+        significant\/.style = {blue, line width=\\lw, join=round},
+        semisignificant\/.style = {purple, line width=\\lw, join=round},
+        tick/.style = {black, thick},
+        tick_thin/.style = {black, thin}}\n\n";
+    }
+    
+	sub print_coordinate_system{
+	    my $maxepi = $_[0];
+	    my $maxclusters = $_[1];
+	    my $y_foreachloop = "\\foreach \\y in {1,...,\\maxclusters} {";
+	    my ($xaxisshift, $yaxisshift) = (0,0);
+	    if($maxclusters>10){$y_foreachloop = "\\foreach \\y in {1,5,10,...,\\maxclusters} {"; $xaxisshift=1;}
+	    elsif($maxclusters>4) {$yaxisshift =0.8;}
+	
+	    print " \\draw[thin, gray, dotted ,step=1] (0,0) grid (\$ (\\maxepi+2,\\maxclusters) \$);
+	    \\foreach \\x in {2,4,...,\\maxepi} {
+	        \\draw[tick,black,thin] (\\x,-0.4) -- (\\x,-0.1);     
+	        \\node at (\\x,-0.4) [below,black] { \$\\x\$ };}",
+	        $y_foreachloop    
+	            ,"
+	            \\draw[tick,black,thin] (-0.2,\\y) -- (-0.05,\\y);
+	    \\node at (-0.2,\\y) [left,black] { \$\\y\$ };}
+	    \\foreach \\x in {1,2,...,\\maxepi} {
+	        \\draw[tick,black,thin] (\\x,-0.4) -- (\\x,-0.2);
+	    }
+	    \\draw[tick,black,thin]  (\$ (\\maxepi+2,\\maxclusters+1) \$) -- (\$ (-0.2,\\maxclusters+1) \$) -- (-0.2,-0.4) -- (\$ (\\maxepi+2,-0.4) \$) ;";
+	    if($maxclusters<12){
+	        print "\n\\node at (\$(5.5,-2.5-$xaxisshift)\$) [left,black] { epistatic weight };";
+	    }
+	    else{
+	        print "\n\\node at (\$(\\maxepi*0.5+2.5,-2.5-$xaxisshift)\$) [left,black] { epistatic weight };";
+	    }
+	}
+
+	sub print_coordinate_system_normalized{
+	    my ($dim,$maxepi, $maxclusters)=@_;
+	    if ($dim==5){
+	        print  "\n\\draw[thin, gray, dotted ,step=1] (0,0) grid (\$ (0.04,\\maxclusters) \$);
+	        \\foreach \\x in {0.02,0.04,...,0.1} {
+	            \\draw[tick,black,thin] (\\x,-0.4) -- (\\x,0.2);     
+	        }
+	        \\foreach \\x in {0.02,0.04,0.06} {
+	            \\node at (\\x,-0.4) [below,black] { \$\\x\$ };
+	        }            
+	        \\foreach \\x in {0.01,0.02,...,0.1} {
+	            \\draw[tick,black,thin] (\\x,-0.4) -- (\\x,-0.1);     
+	        }            
+	        \\foreach \\y in {1,5,10,...,\\maxclusters} {
+	            \\draw[tick,black,thin] (-0.01,\\y) -- (-0.005,\\y);
+	            \\node at (-0.012,\\y) [left,black] { \$\\y\$ };
+	        }
+	        \\draw[tick,black,thin]  (\$ (0.12,\\maxclusters+1) \$) -- (\$ (-0.005,\\maxclusters+1) \$) -- (-0.005,-0.4) -- (\$ (0.12,-0.4) \$) ;
+	        \\node at (\$(0.05,-2.5-1.6)\$) [left,black] { epistatic units };
+	        \\node at (\$(-0.03,6.5)\$) [rotate=90] { dual edges };";
+	    }
+	    if ($dim==4 && $maxepi>0.1){
+	        print "\n\\draw[thin, gray, dotted ,step=1] (0,0) grid (\$ (0.2,\\maxclusters) \$);
+	        \\foreach \\x in {0.02, 0.04,...,0.34} {
+	            \\draw[tick,black,thin] (\\x,-0.4) -- (\\x,-0.1);
+	        }
+	        \\foreach \\x in {0.1, 0.2, 0.3} {
+	            \\draw[tick,black,thin] (\\x,-0.4) -- (\\x,0.15);
+	        }
+	        \\foreach \\x in {0.1,0.2} {
+	            \\node at (\\x,-0.4) [below,black] { \$\\x\$ };
+	        }
+	        \\foreach \\y in {1,5,10,...,15} {
+	            \\draw[tick,black,thin] (-0.01,\\y) -- (-0.02,\\y);
+	            \\node at (-0.018,\\y) [left,black] { \$\\y\$ };}
+	        \\draw[tick,black,thin]  (\$ (0.365,\\maxclusters+1) \$) -- (\$ (-0.01,\\maxclusters+1) \$) -- (-0.01,-0.4) -- (\$ (0.365,-0.4) \$) ;
+	        \\node at (\$(0.2,-2.5-1)\$) [left,black] {\\footnotesize epistatic units };
+	        \\node at (\$(-0.08,\\maxclusters*0.2)\$) [rotate=90] { \\footnotesize dual edges };";
+	    }
+	    if ($dim==4  && $maxepi>0.048 && $maxepi<=0.1){
+	        print "\n\\draw[thin, gray, dotted ,step=1] (0,0) grid (\$ (0.1,\\maxclusters) \$);
+	
+	        \\foreach \\x in {0.025,0.05,..., 0.225} {
+	            \\draw[tick,black,thin] (\\x,-0.4) -- (\\x,-0.1);
+	        }
+	        \\foreach \\x in {0.05,0.15} {
+	            \\node at (\\x,-0.4) [below,black] {\\footnotesize \$\\x\$ };
+	        }
+	        \\foreach \\x in {0.1,0.2} {
+	            \\draw[tick,black,thin] (\\x,-0.4) -- (\\x,0.15);
+	            \\node at (\\x,-0.4) [below,black] { \$\\x\$ };
+	        }
+	        \\foreach \\y in {1,5,10,...,\\maxclusters} {
+	            \\draw[tick,black,thin] (-0.01,\\y) -- (-0.022,\\y);
+	            \\node at (-0.02,\\y) [left,black] { \$\\y\$ };
+	        }
+	        \\draw[tick,black,thin]  (\$ (0.25,\\maxclusters+1) \$) -- (\$ (-0.01,\\maxclusters+1) \$) -- (-0.01,-0.4) -- (\$ (0.25,-0.4) \$) ;
+	        \\node at (\$(0.12,-2.5-1)\$) [left,black] { \\footnotesize epistatic units };
+	        \\node at (\$(-0.06,\\maxclusters*0.2)\$) [rotate=90] { \\footnotesize dual edges };";
+	    } 
+	    if ($dim==4 && $maxepi<=0.048){
+	        print "\n  \\draw[thin, gray, dotted ,step=1] (0,0) grid (\$ (0.05,\\maxclusters) \$);
+	        \\foreach \\x in {0.025, 0.05,...,0.1} {
+	            \\draw[tick,black,thin] (\\x,-0.4) -- (\\x,-0.1);
+	        }
+	        \\foreach \\x in {0.025,0.05,0.075} {
+	            \\node at (\\x,-0.4) [below,black] {\\footnotesize \$\\x\$ };
+	        }
+	        \\foreach \\x in {0.1} {
+	            \\draw[tick,black,thin] (\\x,-0.4) -- (\\x,0.15);
+	            \\node at (\\x,-0.4) [below,black] { \$\\x\$ };
+	        }
+	        \\foreach \\y in {1,5,10,...,\\maxclusters} {
+	            \\draw[tick,black,thin] (-0.005,\\y) -- (-0.008,\\y);
+	            \\node at (-0.007,\\y) [left,black] { \$\\y\$ };
+	        }
+	        \\draw[tick,black,thin]  (\$ (0.125,\\maxclusters+1) \$) -- (\$ (-0.005,\\maxclusters+1) \$) -- (-0.005,-0.4) -- (\$ (0.125,-0.4) \$) ;
+	        \\node at (\$(0.06,-2.5-1)\$) [left,black] {\\footnotesize epistatic units };
+	        \\node at (\$(-0.024,\\maxclusters*0.2)\$) [rotate=90] { \\footnotesize dual edges };";
+	    }
+	    if($dim==3){
+	        print "\n \\draw[thin, gray, dotted ,step=1] (0,0) grid (\$ (0.05,\\maxclusters) \$);
+	        \\foreach \\x in {0.025, 0.05, 0.075} {
+	            \\draw[tick,black,thin] (\\x,-0.4) -- (\\x,-0.1);
+	        }
+	        \\foreach \\x in {0.1} {
+	            \\draw[tick,black,thin] (\\x,-0.4) -- (\\x,0.1);
+	        }
+	        \\foreach \\x in {0.1} {
+	            \\node at (\\x,-0.4) [below,black] { \$\\x\$ };
+	        }
+	        \\foreach \\x in {0.05} {
+	            \\draw[tick,black,thin] (\\x,-0.4) -- (\\x,0);
+	        }
+	        \\foreach \\x in {0.025, 0.05, 0.075} {
+	            \\node at (\\x,-0.4) [below,black] {\\tiny \$\\x\$ };
+	        }
+	        \\foreach \\y in {1,...,5} {
+	            \\draw[tick,black,thin] (-0.0125,\\y) -- (-0.01,\\y);
+	            \\node at (-0.0125,\\y) [left,black] { \$\\y\$ };
+	        }
+	        \\draw[tick,black,thin]  (\$ (0.005+0.1,\\maxclusters+1) \$) -- (\$ (-0.01,\\maxclusters+1) \$) -- (-0.01,-0.4) -- (\$ (0.005+0.1,-0.4) \$) ;
+	        \\node at (\$(0.01+3\*\\maxepi,-2.2)\$) [left,black] {\\footnotesize epistatic units };
+	        \\node at (\$(-2.5\*\\maxepi,\\maxclusters*0.2+0.5)\$) [rotate=90] { \\footnotesize dual edges };";
+	    }       
+	}
+    
+    sub print_end_figure{
+        print  "\n\n\\end{tikzpicture}\n\n";
+    }
+ 
+    sub print_end_figure_normalized{
+        print  "\n\n\\end{tikzpicture}\n\n";
+    }
+    
+    sub print_end_document{
+        print "\\end{document}\n\n";
+    }
+
+    sub print_tex_header{
+        print "\\documentclass[crop,tikz]{standalone}\n\n
+        \\usepackage{amsmath,amssymb,amsfonts,amsthm}
+        \\usepackage{tikz}
+        \\usepackage{caption}
+        \\usepackage[labelformat=empty, textfont=it, textfont=it, labelfont=small]{subcaption}
+        \\usepackage{float}
+        \\usetikzlibrary{calc,shapes} 
+        \\usepackage{tikz-cd}
+        \\usepackage{algorithm2e} \n\n\\begin{document}\n\n";
+    }
+    
+
+
+########### user_method explode3d############################
+    # @category Visual
+    # Draws a parallel-transport-inspired graphic, for three dimensional filtrations over the same point configuration only. 
+    # @example
+    # $Eble_0s0ss = $Eble->subfiltration("0*0**");
+    # $Eble_01sss = $Eble->subfiltration("01***");
+    # explode3d($Eble_01sss, $Eble_0s0ss); 
+    user_function explode3d{
+        my ($fil1, $fil2) = @_;
+        if (!explode3d_valid($fil1, $fil2)){die "Your input of explode3d seems to be invalid!\n"}
+        my $filename = join("", "explode", $fil1->name, $fil2->name);
+        $filename =~ s/\*/s/g;
+        my $path = join("", "/tmp/", $filename, ".tex");
+        open OUT, "> $path"; select OUT;
+        print "\\documentclass[crop,tikz]{standalone}\n
+        \\usetikzlibrary{calc,shapes}\n
+        \\usepackage{tikz-cd}\n
+        \\usepackage{ifthen}\n
+        \\usepackage{tikz-3dplot}\n
+        \\begin{document}\n
+        \\tdplotsetmaincoords{60}{100}\n
+        \\tikzstyle{xyz} = [ x={(-1.8cm, 1.8cm)}, y={(4cm, 0cm)}, z={(0cm, 3cm)} ]\n
+        \\begin{tikzpicture}[xyz, scale=1.5]\n
+        ";
+        draw_triangulation($fil1, 0, 1);
+        draw_triangulation($fil2, 4, 1);
+        draw_parallels($fil1->POINTS, 4);
+        draw_triangles($fil1, -5, 2.2);
+        draw_triangles($fil2, 8, 2.2);
+        print "\\node [text=black] at (0,0,-2) {\\Huge $filename };\n
+        \\end{tikzpicture}\n
+        \\end{document}";
+        close OUT;
+        select STDOUT;
+        print join("","explode diagram written to ",$path, "\n");
+    }
+    
+    sub explode3d_valid{
+        my ($fil1, $fil2) = @_;
+        if ($fil1->POINTS != $fil2->POINTS){return 0;}
+        if($fil1->POINTS->cols!=4){return 0}
+        return 1;
+    }
+
+    sub draw_triangulation{
+        my ($fil, $move) = @_;
+        draw_triangles($fil, $move, 1);
+        draw_cube($fil->POINTS, $move, 1);
+    }
+
+    sub draw_cube{
+        my ($pt, $move, $dial)= @_;
+        my $ptstring = ptstring($pt, $move, $dial);
+        my $edgesstring=edgesstring($pt, $move, 1);
+        print "\\foreach \\x\\y\\z\\label in $ptstring {
+        \\node[label={right}:{\\Huge \\label}] at (\\x,\\y,\\z) {};
+        \\node at (\\x,\\y,\\z) {\\Huge \\textbullet};}
+        \n\n\n
+        $edgesstring
+        \n\n";
+    }
+
+    sub draw_triangles{
+        my ($fil, $move, $dial) = @_;
+        my ($pt, $triang)=($fil->POINTS, $fil->MAXIMAL_CELLS);
+        draw_walls($fil, $move, $dial);
+        my @colors;
+        my $linewidth;
+        if($dial ==1){@colors = ("red")x$triang->rows; $linewidth= '1.6'}
+        else{
+            #@colors = ('blue', 'green', 'yellow', 'red', 'brown', 'purple'); 
+            @colors = ("black")x$triang->rows;
+            $linewidth = '3'}
+        for(my $i=0; $i<$triang->rows; ++$i){
+            my $cell = $triang->row($i);
+            $cell =~ s/([\{\}])//g;
+            my $cellvec = new Vector<Rational>($cell);
+            #my $corner = get_corner($cellvec, $pt);
+            draw_triangle($fil, $cellvec, $move, $dial, $colors[$i], $linewidth);
+        }
+    }
+
+    sub draw_triangle{
+        my ($fil, $cellvec, $move, $dial, $color, $linewidth) = @_;
+        my $pt = $fil->POINTS;
+        my @coords = coords(new Matrix<Rational>($pt->minor(new Set($cellvec), ~[0])), $move, $dial);
+        for (my $j=0; $j<scalar(@coords); ++$j){ 
+            for(my $k=$j+1; $k< scalar(@coords); ++$k){
+                print join("", "\\draw[color=$color, line width = $linewidth]", $coords[$j], " -- ", $coords[$k], ";\n");
+                print "\\node [text=red] at $coords[$j] {\\Huge \\textbullet};\n";
+                print "\\node [text=red] at $coords[$k] {\\Huge \\textbullet};\n";
+            }
+        }
+    }
+
+    sub draw_walls{
+        my ($fil, $move, $dial)=@_;
+        for (my $crit_edge_id=0; $crit_edge_id<$fil->CRITICAL_EDGES->size; ++$crit_edge_id){
+            my $edge_id=$fil->CRITICAL_EDGES->[$crit_edge_id];
+            my $color="";
+            if($fil->CRITICAL_SIGNIFICANCES->[$crit_edge_id] eq "cluster"){next;} #don't draw cluster ridges.
+            elsif($fil->CRITICAL_SIGNIFICANCES->[$crit_edge_id] eq "semisignificant"){$color = "purple";}
+            elsif($fil->CRITICAL_SIGNIFICANCES->[$crit_edge_id] eq "significant"){$color = "blue";}
+            my @coords = coords(new Matrix<Rational> ($fil->POINTS->minor( $fil->RIDGES->[$edge_id], ~[0])), $move, $dial);
+            my $wall = "\\draw[ fill=$color, opacity= 0.1]";
+            for(my $j=0; $j<scalar(@coords); ++$j){
+                $wall .= join(" ", $coords[$j], "--", "");
+            }
+        $wall .= "cycle;";
+        print  $wall, "\n";
+        }
+    }
+
+    sub draw_parallels{
+        my ($pt, $dist)= @_;
+        for (my $i=0; $i<$pt->rows; ++$i){
+            my $start = coord($pt->[$i]->slice(~[0]), 0, 1);
+            my $end = coord($pt->[$i]->slice(~[0]), $dist, 1);
+            print join("", "\\draw[color=blue, thick, dotted]", $start, " -- ", $end, ";\n");
+        }
+    }
+
+    sub coord{
+        my ($vec, $move, $dial) = @_;
+        my $coords = "(";
+        $coords .= join("", r($vec->[0], 0, $dial), ",", r($vec->[1], $move, $dial), "," ,r($vec->[2], 0, $dial), ")");
+    }
+
+   sub coords{
+        my ($mat, $move, $dial) = @_;
+        my $s = barycenter($mat);
+        my @coords = ();
+        for(my $i=0; $i<$mat->rows; ++$i){
+            my $coord = "(";
+            $coord .= join("", r($mat->[$i][0], 0, $dial, $s->[0]) , ",", r($mat->[$i][1], $move, $dial, $s->[1]), "," ,r($mat->[$i][2], 0, $dial, $s->[2]), ")");
+            push @coords, $coord;}
+        return @coords;
+    }
+ 
+    sub barycenter{
+        my ($mat)=@_;
+        my $barycenter = new Vector<Rational>($mat->cols);
+        for(my $i=0; $i<$mat->rows; ++$i){
+            $barycenter += $mat->row($i);}
+    return $barycenter*1/$mat->rows;
+    }
+
+    sub r{
+        my ($zeroorone, $move, $dial, $s) = @_;
+        if ($zeroorone==0 && $dial==1){return -1 + $move;}
+        if ($zeroorone==0){return (sprintf("%.3f", convert_to<Float>(0.5*$dial*(-1+$s) + $move)));}
+        if ($dial>1){ return (sprintf("%.3f",convert_to<Float>(0.5*$dial*($zeroorone + $s)+$move))) }
+        return (sprintf("%.3f",convert_to<Float>($dial*($zeroorone)+$move)));
+    }
+
+    sub edgesstring{
+        my ($pt, $move, $dial)=@_;
+        my $edgesstring = "";
+        for (my $i=0; $i<$pt->rows-1; ++$i){
+            for (my $j=$i+1; $j<$pt->rows; ++$j){
+                my $dist = vert_dist($pt->[$i], $pt->[$j]);
+                if ($dist ==1){
+                    my $start = coord($pt->[$i]->slice(~[0]), $move, $dial);
+                    my $end = coord($pt->[$j]->slice(~[0]), $move, $dial);
+                    $edgesstring .= join("", "\\draw[line width=4] ",$start, " -- ", $end, ";\n");}
+            }
+        }
+        return $edgesstring;
+    }
+
+    sub vert_dist{
+        my ($vert1, $vert2)=@_;
+        my $diffvec =$vert1-$vert2;
+        my $norm = 0;
+        for (my $k=0; $k<$diffvec->dim; ++$k){$norm += $diffvec->[$k]**2}
+        return $norm;
+    }   
+    
+    sub ptstring{
+        my ($pt, $move)=@_;
+        my $ptstring = "{";
+        for (my $i=0; $i<$pt->rows; ++$i){
+            $ptstring .= join("", r($pt->[$i][1], 0, 1), "/", r($pt->[$i][2], $move, 1), "/" ,r($pt->[$i][3], 0, 1), "/","$pt->[$i][1]$pt->[$i][2]$pt->[$i][3]", ", ") ;}
+        $ptstring = substr($ptstring, 0, length($ptstring)-2);
+        $ptstring .= "}";
+        return $ptstring;
+    }
+
+# Local Variables:
+# mode: perl
+# cperl-indent-level:4
+# End:
+ 

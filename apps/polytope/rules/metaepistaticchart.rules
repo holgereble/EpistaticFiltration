@@ -1,0 +1,146 @@
+#  Copyright (c) 2020
+#  Holger Eble (TU Berlin)
+#  Michael Joswig (TU Berlin and MPI MiS Leipzig)
+#  Lisa Lamberti (ETH Zuerich)
+#  William B. Ludington (Carnegie Science)
+
+#  This program is free software; you can redistribute it and/or modify it
+#  under the terms of the GNU General Public License as published by the
+#  Free Software Foundation; either version 2, or (at your option) any
+#  later version: http://www.gnu.org/licenses/gpl.txt.
+
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#-------------------------------------------------------------------------------
+
+object EpistaticGraph{
+
+    # The filtration everything is derived from, i.e. the significant ridges of this filtration are intersected with all possible subfiltrations.
+    property SOURCE_FILTRATION: Filtration;
+    
+    # Stores the intersections of the SOURCE_FILTRATION ridges with all subfiltrations of the SOURCE_FILTRATION.
+    # @example
+    # print STDOUT join("\n", @{$specific_epistatic_graph->INDUCED_FROM_LOWER});
+    # |(2 significant->significant) (01*** 2)
+    # |(2 significant->significant) (0**0* 1)
+    # |(1 significant->significant) (01*** 1)
+    # |(1 significant->significant) (0*0** 1)
+    # The second line of the output means: 
+    # The ridge of the critical bipyramid labeled 2 of the source filtration (here 0****) has an intersection with the face 0**0* (of the right cardinality) and this intersection appears there as ridge of the critical bipyramid labeled 1. Both interactions are significant, hence we have type significant(parent)->significant(subfiltration).
+    property INDUCED_FROM_LOWER: Array<Pair<Pair<Int,String>,Pair<String, Int>>>;
+
+}
+
+object Filtration{
+
+    method get_meta_epistatic_chart{
+        my $fil = shift;
+        my @graph = ();
+        my @epistatic_graphs = ();
+        my @strings_0figure = get_0vertexfigure($fil->POINTS->cols-1);
+        for my $string (@strings_0figure){
+            my $subfil = $fil->subfiltration($string);
+            my @epistatic_graph = ();
+            my @signif_wallmatrices = get_signif_wallmatrices($fil, $subfil);
+            for (my $k=0; $k< scalar(@signif_wallmatrices); ++$k){
+                my $wallmatrix = $signif_wallmatrices[$k];
+                my @graph_print = ();
+                my @facegraph = ();
+                my $intersec_pairs = get_wallmatrix_intersections($wallmatrix, $subfil->POINTS->cols-1);
+                my $meets_lower_critedge = 0;
+                for (my $j=0; $j<$intersec_pairs->size; ++$j){
+                    my $intersec_pair = $intersec_pairs->[$j];
+                    my $intersec_fil = $fil->subfiltration($intersec_pair->second);
+                    my $top_intersec_matrix = $intersec_pair->first;
+                    my @intersec_wallmatrices = get_all_wallmatrices($fil, $intersec_fil);
+                    for (my $i=0;$i<scalar(@intersec_wallmatrices); ++$i){
+                        if ($intersec_wallmatrices[$i] == $top_intersec_matrix){
+                            my $top_pair = new Pair<Int,String>($subfil->index_of_kth_significant_edge($k),join("","significant->",$intersec_fil->CRITICAL_SIGNIFICANCES->[$i]));
+                            my $bottom_pair = new Pair<String, Int>($intersec_pair->second, $intersec_fil->CRITICAL_SIGNIFICANCES->size-$i);
+                            my $top_bottom = new Pair<Pair<Int,String>, Pair<String, Int>>($top_pair, $bottom_pair);
+                            push @epistatic_graph, $top_bottom;
+                        }
+                    }
+                }
+            }
+            my $egraph_induced_from_lower = new Array<Pair<Pair<Int,String>,Pair<String, Int>>>([@epistatic_graph]);
+            push @epistatic_graphs, new EpistaticGraph($string, INDUCED_FROM_LOWER=>$egraph_induced_from_lower, SOURCE_FILTRATION=>$fil);
+        }
+        return new Array<EpistaticGraph>([@epistatic_graphs]);
+    }
+
+      method index_of_kth_significant_edge{
+        my ($fil, $k)=@_;
+        my $no_maxcells = $fil->MAXIMAL_CELLS->rows;
+        my $cnt_signif = -1;
+        for(my $i=0; $i<$fil->CRITICAL_EPISTATIC_WEIGHTS->size; ++$i){
+            if($fil->CRITICAL_SIGNIFICANCES->[$i] eq "significant"){++$cnt_signif;}
+            if($k==$cnt_signif){return $no_maxcells-$i-1;}
+        }
+        die "ERROR: index of kth significant edge\n";
+    }
+
+    sub get_wallmatrix_intersections{ 
+        my ($wallmatrix, $subfildim) = @_; 
+        my @intersection_strings = (); 
+        for (my $row =0; $row<$wallmatrix->rows; ++$row){ 
+            my $wallminor = $wallmatrix->minor(~[$row],  All); 
+            my $subsets_array = k_element_subsets_of_n($wallmatrix->cols, 2);         
+            for(my $j=0; $j<$subsets_array->size; ++$j){ 
+                my $subset = $subsets_array->[$j]; 
+                my $poss_intersection = new Matrix($wallminor->minor(All, $subset)); 
+                if (dupli_rows($poss_intersection)){ 
+                    my @stars = map {"*" } (0 .. $wallmatrix->cols-1); 
+                    for(my $num=0; $num<$subset->size; ++$num){ 
+                        $stars[$subset->[$num]]=$wallminor->[0][$subset->[$num]]; 
+                    } 
+                    push @intersection_strings, new Pair<Matrix, String>($wallminor, join("", @stars)); 
+                } 
+            } 
+        }        
+        return new  Array<Pair<Matrix, String>>([@intersection_strings]);  
+    } 
+
+    #Checks if all rows are duplicates of the first row 
+    sub dupli_rows{ 
+        my $matrix = $_[0]; 
+        my $matrixok = 1; 
+        for (my $k=0; $k<$matrix->cols; ++$k){ 
+            my $colok = 1; 
+            for (my $l=0; $l<$matrix->rows-1; ++$l){ 
+                if ($matrix->[$l][$k]!=$matrix->[$l+1][$k]){$colok=0;} 
+            } 
+            if ($colok==0){$matrixok=0} 
+        } 
+        return $matrixok; 
+    } 
+}
+
+# @category MetaEpistaticChart
+# Computes the metaepistatic chart for a filtration.
+# Returns an array of type <EpistaticGraph>, one EpistaticGraph for each face of the wild type vertex figure.
+# E.g. if $fil is a filtration over the 5-dim cube, the returned array is of length 5 and the faces considered are 0****, *0***, **0**, ***0* and ****0.
+# A BigObject of type EpistaticGraph records the interactions which are induced from lower dimensions.
+# @example
+# $me-chart = metaepistatic_chart($fil);
+# $specific_epistatic_graph = $me-chart->[0]; # Corresponds to the face 0****
+# print STDOUT join("\n", @{$specific_epistatic_graph->INDUCED_FROM_LOWER});
+# |(2 significant->significant) (01*** 2)
+# |(2 significant->significant) (0**0* 1)
+# |(1 significant->significant) (01*** 1)
+# |(1 significant->significant) (0*0** 1)
+# The second line of the output means: 
+# The ridge of the critical bipyramid labeled 2 of the source filtration (here 0****) has an intersection with the face 0**0* (of the right cardinality) and this intersection appears there as ridge of the critical bipyramid labeled 1. Both interactions are significant, hence we have type significant(parent)->significant(subfiltration).
+# @return Array<EpistaticGraph>
+user_function metaepistatic_chart{
+    my $fil=shift;
+    return $fil->get_meta_epistatic_chart()
+}
+
+# Local Variables:
+# mode: perl
+# cperl-indent-level:4
+# End:
+

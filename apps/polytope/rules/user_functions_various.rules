@@ -1,0 +1,31 @@
+# @category Geometry
+# Returns bipyramid in bitstring wall-satellite-representation.
+# Call: get_bipyram_bitstring($subfiltration, $edge_no_sub, $parent_filtration->POINTS); 
+# Here $edge_no_sub is some natural number k referring to the k-th entry of $subfiltration->EDGES.
+# The last parameter $parent_filtration->POINTS is optional, see example below.  
+# @example
+# print get_bipyram_bitstring($Eble_normalized_0ssss, 12, $Eble_normalized->POINTS);
+# |{00100}+{00000;01100;00110;00101}+{00111}
+# print get_bipyram_bitstring($Eble_normalized_0ssss, 12, $Eble_normalized->POINTS);
+# |{0100}+{0000;1100;0110;0101}+{0111}
+# @return String: bipyramid in bitstring wall-satellite-representation
+user_function get_bipyram_bitstring{
+    my ($s, $edge_no, $motherpoints)=@_;
+    my $points;
+    my $s_as_sub;
+    if(ref $motherpoints){
+        $s_as_sub = $s->AS_SUBSYSTEM;
+        $points=new Matrix($motherpoints->minor($s_as_sub, All))
+    }
+    else{$points=$s->POINTS}
+    my $vert_e1_idx=$s->SATELLITE_VERTICES->[$edge_no]->first();
+    my $vert_e1=join("", "{", @{$points->row($vert_e1_idx)->slice(~[0])}, "}");
+    my $vert_e2_idx=$s->SATELLITE_VERTICES->[$edge_no]->second();
+    my $vert_e2=join("", "{", @{$points->row($vert_e2_idx)->slice(~[0])}, "}");
+    my @wall=();
+    foreach my $vert_idx (@{$s->RIDGES->[$edge_no]}){
+        push @wall, join("", @{$points->row($vert_idx)->slice(~[0])});
+    }
+    my $wall=join (";", @wall);
+    return join("", $vert_e1,"+{" ,$wall, "}+",$vert_e2);
+}
