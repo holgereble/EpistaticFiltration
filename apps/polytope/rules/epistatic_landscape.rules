@@ -144,7 +144,7 @@ object Filtration{
                 $opacity= sprintf("%.3f", $opacity+$opacity_step)}
         }
         $edges_tex .= join (",", @strings);
-        $edges_tex .= "}{\n\\draw[linestyle_unnamed__1, line width=2pt,\\c, opacity=\\o, \\m] (v\\x) -- (v\\y);\n}\n";
+        $edges_tex .= "}{\n\\draw[edgestyle_unnamed__1, line width=2pt,\\c, opacity=\\o, \\m] (v\\x) -- (v\\y);\n}\n";
         return $edges_tex;
     }
 
